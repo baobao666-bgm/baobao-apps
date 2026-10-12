@@ -9,6 +9,7 @@
   "bin": [
     "runtime\\OpenBrowser.exe"
   ],
-  "post_install": "$sub = Get-ChildItem \"$dir\" -Directory | Where-Object { $_.Name -match '^OpenBrowser-' }; if ($sub) { Move-Item \"$($sub[0].FullName)\\*\" $dir -Force -Recurse; Remove-Item \"$($sub[0].FullName)\" -Force -Recurse }",
-  "notes": "Local API/MCP on 127.0.0.1:50325. To use the C++ fingerprint kernel, set OpenBrowser's kernel path to <scoop dir>\\fingerprint-chromium\\current\\chrome.exe. Bundled kernel (Wayfern) works out of the box."
+  "post_install": "Get-Process OpenBrowser -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \"$dir*\" } | Stop-Process -Force -ErrorAction SilentlyContinue; $sub = Get-ChildItem \"$dir\" -Directory | Where-Object { $_.Name -match '^OpenBrowser-' }; foreach ($s in $sub) { Move-Item \"$($s.FullName)\\*\" $dir -Force -Recurse; Remove-Item $s.FullName -Force -Recurse }",
+  "post_uninstall": "Get-Process OpenBrowser -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \"*$dir*\" } | Stop-Process -Force -ErrorAction SilentlyContinue",
+  "notes": "Local API/MCP on 127.0.0.1:50325. Bundled Wayfern kernel works out of the box; to use the C++ fingerprint kernel, set OpenBrowser's kernel path to <scoop dir>\\fingerprint-chromium\\current\\chrome.exe. Launch with 'OpenBrowser' from PATH."
 }

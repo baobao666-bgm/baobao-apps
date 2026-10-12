@@ -9,6 +9,7 @@
   "bin": [
     "chrome.exe"
   ],
-  "post_install": "$sub = Get-ChildItem \"$dir\" -Directory | Where-Object { $_.Name -match '^ungoogled-chromium_' }; if ($sub) { Move-Item \"$($sub[0].FullName)\\*\" $dir -Force -Recurse; Remove-Item \"$($sub[0].FullName)\" -Force -Recurse }",
+  "post_install": "Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \"$dir*\" } | Stop-Process -Force -ErrorAction SilentlyContinue; $sub = Get-ChildItem \"$dir\" -Directory | Where-Object { $_.Name -match 'ungoogled-chromium_' }; foreach ($s in $sub) { Move-Item \"$($s.FullName)\\*\" $dir -Force -Recurse; Remove-Item $s.FullName -Force -Recurse }",
+  "post_uninstall": "Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \"*$dir*\" } | Stop-Process -Force -ErrorAction SilentlyContinue",
   "notes": "Enable fingerprinting with: chrome.exe --fingerprint <32-bit-seed> --fingerprint-platform windows --fingerprint-brand Chrome --timezone <IANA-tz>. Point OpenBrowser's kernel path at: <scoop dir>\\fingerprint-chromium\\current\\chrome.exe"
 }
