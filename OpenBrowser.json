@@ -9,7 +9,7 @@
   "bin": [
     "runtime\\OpenBrowser.exe"
   ],
-  "pre_install": "Get-Process OpenBrowser -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \"$dir*\" } | Stop-Process -Force -ErrorAction SilentlyContinue; $sub = Get-ChildItem \"$dir\" -Directory | Where-Object { $_.Name -match '^OpenBrowser-' }; foreach ($s in $sub) { Move-Item \"$($s.FullName)\\*\" $dir -Force; Remove-Item $s.FullName -Force -Recurse }",
+  "pre_install": "Get-Process OpenBrowser -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \"$dir*\" } | Stop-Process -Force -ErrorAction SilentlyContinue; $sub = Get-ChildItem \"$dir\" -Directory | Where-Object { $_.Name -match '^OpenBrowser-' }; foreach ($s in $sub) { Move-Item \"$($s.FullName)/*\" $dir -Force; Remove-Item $s.FullName -Force -Recurse }; $mf=\"$dir/runtime/resources/app/main.js\"; if(Test-Path $mf){$c=Get-Content -Raw $mf;$n=\"return pathToFileURL(path.join(__dirname, 'index.html')).href;\";$r=\"try { return pathToFileURL(fs.realpathSync(path.join(__dirname, 'index.html'))).href; } catch (_) { return pathToFileURL(path.join(__dirname, 'index.html')).href; }\";if($c.Contains($n)-and -not $c.Contains(\"fs.realpathSync(path.join(__dirname, 'index.html'))\")){$c=$c.Replace($n,$r);[System.IO.File]::WriteAllText($mf,$c)}}",
   "post_uninstall": "Get-Process OpenBrowser -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \"*$dir*\" } | Stop-Process -Force -ErrorAction SilentlyContinue",
   "notes": "Local API/MCP on 127.0.0.1:50325. Bundled Wayfern kernel works out of the box; to use the C++ fingerprint kernel, set OpenBrowser's kernel path to <scoop dir>\\fingerprint-chromium\\current\\chrome.exe. Launch with 'OpenBrowser' from PATH."
 }
