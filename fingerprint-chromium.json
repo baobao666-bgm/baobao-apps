@@ -1,0 +1,14 @@
+{
+  "version": "150.0.7871.186",
+  "description": "Open source fingerprint browser based on Ungoogled Chromium (C++-level, seed-deterministic, can report as real Chrome).",
+  "homepage": "https://github.com/adryfish/fingerprint-chromium",
+  "license": "BSD-3-Clause",
+  "url": "https://github.com/adryfish/fingerprint-chromium/releases/download/150.0.7871.186/ungoogled-chromium_150.0.7871.186-1.1_windows_x64.zip",
+  "sha256": "4d549c326e51ebbabf562fd365eb5380d9d4a81200da2c60f075c688d9a77e03",
+  "architecture": "x64",
+  "bin": [
+    "chrome.exe"
+  ],
+  "post_install": "$sub = Get-ChildItem \"$dir\" -Directory | Where-Object { $_.Name -match '^ungoogled-chromium_' }; if ($sub) { Move-Item \"$($sub[0].FullName)\\*\" $dir -Force -Recurse; Remove-Item \"$($sub[0].FullName)\" -Force -Recurse }",
+  "notes": "Enable fingerprinting with: chrome.exe --fingerprint <32-bit-seed> --fingerprint-platform windows --fingerprint-brand Chrome --timezone <IANA-tz>. Point OpenBrowser's kernel path at: <scoop dir>\\fingerprint-chromium\\current\\chrome.exe"
+}

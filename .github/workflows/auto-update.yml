@@ -1,0 +1,42 @@
+# Auto-update the two manifests when upstream releases new versions.
+# 档位3: GitHub bucket + CI 免手动维护 URL/sha256。
+# - 每日 06:00 UTC 自动检查
+# - 也可在 Actions 页手动 Run workflow（workflow_dispatch）
+# - 上游发新版 => 自动 bump version/url + 重新算 sha256 + 回写仓库
+name: auto-update
+
+on:
+  schedule:
+    # 每天 06:00 UTC（北京时间 14:00）检查一次
+    - cron: '0 6 * * *'
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      # 只装运行脚本需要的东西（不用 npm ci）
+      - name: Update manifests
+        run: node .github/scripts/update.js
+
+      - name: Commit if changed
+        run: |
+          git config user.name "scoop-bucket-ci"
+          git config user.email "scoop-bucket-ci@users.noreply.github.com"
+          git add -A
+          if git diff --staged --quiet; then
+            echo "No changes, nothing to commit."
+          else
+            git diff --staged
+            git commit -m "auto: bump upstream manifests ($(date -u +%Y-%m-%d))"
+            git push
+          fi

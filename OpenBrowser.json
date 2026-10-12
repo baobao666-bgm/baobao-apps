@@ -1,0 +1,14 @@
+{
+  "version": "1.0.23",
+  "description": "OpenBrowser - local desktop fingerprint browser: isolated Chromium profiles, proxy/fingerprint/extension control, batch management, window sync, local RPA, Local API + MCP (127.0.0.1:50325).",
+  "homepage": "https://github.com/sheying2013/OpenBrowser",
+  "license": "MIT",
+  "url": "https://github.com/sheying2013/OpenBrowser/releases/download/v1.0.23/OpenBrowser-Windows-x86_64-with-kernel.zip",
+  "sha256": "836631b509c2e04eea14dd6d7fe203ff9fb4c778eecde6a9598a44fdaf22ca99",
+  "architecture": "x64",
+  "bin": [
+    "runtime\\OpenBrowser.exe"
+  ],
+  "post_install": "$sub = Get-ChildItem \"$dir\" -Directory | Where-Object { $_.Name -match '^OpenBrowser-' }; if ($sub) { Move-Item \"$($sub[0].FullName)\\*\" $dir -Force -Recurse; Remove-Item \"$($sub[0].FullName)\" -Force -Recurse }",
+  "notes": "Local API/MCP on 127.0.0.1:50325. To use the C++ fingerprint kernel, set OpenBrowser's kernel path to <scoop dir>\\fingerprint-chromium\\current\\chrome.exe. Bundled kernel (Wayfern) works out of the box."
+}
