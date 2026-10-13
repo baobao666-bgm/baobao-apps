@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// 档位3 CI：拉取两个上游的最新 release，重写 manifest 的 version/url/sha256。
+// 档位3 CI：拉取两个上游的最新 release，重写 manifest 的 version/url/hash（scoop 校验字段）。
 // 上游发新版 => 下一次 schedule/手动运行自动 bump，manifest 始终跟着走。
 
 const fs = require('fs');
@@ -105,14 +105,15 @@ async function main() {
     const changed =
       current.url !== newUrl ||
       current.version !== newVersion ||
-      current.sha256 !== sha;
+      (current.hash || current.sha256) !== sha;
 
     current.url = newUrl;
     current.version = newVersion;
-    current.sha256 = sha;
+    current.hash = sha; // scoop 校验字段（无 "type:" 前缀时默认按 sha256 解析）
+    delete current.sha256; // 清理历史遗留的错字段，避免再次混入
     writeManifest(mfPath, current);
     console.log(
-      `${p.key}: ${current.version}  url=${newUrl}  sha256=${sha}  ${changed ? '(updated)' : '(unchanged)'}`
+      `${p.key}: ${current.version}  url=${newUrl}  hash=${sha}  ${changed ? '(updated)' : '(unchanged)'}`
     );
   }
 }

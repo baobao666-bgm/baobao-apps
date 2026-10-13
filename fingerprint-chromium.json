@@ -4,7 +4,7 @@
   "homepage": "https://github.com/adryfish/fingerprint-chromium",
   "license": "BSD-3-Clause",
   "url": "https://github.com/adryfish/fingerprint-chromium/releases/download/150.0.7871.186/ungoogled-chromium_150.0.7871.186-1.1_windows_x64.zip",
-  "sha256": "4d549c326e51ebbabf562fd365eb5380d9d4a81200da2c60f075c688d9a77e03",
+  "hash": "4d549c326e51ebbabf562fd365eb5380d9d4a81200da2c60f075c688d9a77e03",
   "architecture": "x64",
   "bin": [
     "chrome.exe"
