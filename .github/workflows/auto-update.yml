@@ -1,42 +1,65 @@
 # Auto-update the manifests when upstream releases new versions.
-# 档位3: GitHub bucket + CI 免手动维护 URL/sha256。
-# - 每日 06:00 UTC 自动检查
-# - 也可在 Actions 页手动 Run workflow（workflow_dispatch）
-# - 上游发新版 => 自动 bump version/url + 重新算 sha256 + 回写仓库
+# - 每天 06:00 UTC（北京时间 14:00）检查一次；也可在 Actions 页手动触发
+# - 上游发新版 => 校验通过后创建/更新一个更新 PR（bot/update-manifests），不再直推 main
+# - 任何包检查失败：本次不产生任何提交，workflow 失败并输出逐包结果
+# - PR 由人工审查合并（不自动合并）
 name: auto-update
 
 on:
   schedule:
-    # 每天 06:00 UTC（北京时间 14:00）检查一次
     - cron: '0 6 * * *'
   workflow_dispatch: {}
 
 permissions:
   contents: write
+  pull-requests: write
+
+# 定时与手动触发的运行相互排队，避免并发覆盖
+concurrency:
+  group: auto-update
+  cancel-in-progress: false
 
 jobs:
   update:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: '20'
+          node-version: '24'
 
-      # 只装运行脚本需要的东西（不用 npm ci）
-      - name: Update manifests
+      - name: Check upstream versions and update manifests
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: node .github/scripts/update.js
 
-      - name: Commit if changed
+      - name: Create or update the update PR
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
+          if git diff --quiet && git diff --cached --quiet; then
+            echo "No manifest changes, nothing to do."
+            exit 0
+          fi
+
+          BRANCH="bot/update-manifests"
           git config user.name "scoop-bucket-ci"
           git config user.email "scoop-bucket-ci@users.noreply.github.com"
-          git add -A
-          if git diff --staged --quiet; then
-            echo "No changes, nothing to commit."
+          git checkout -b "$BRANCH"
+          # 只提交预期清单变化（update.js 只在 bucket/ 下写文件）
+          git add bucket/
+          git diff --cached --stat
+          git commit -m "auto: update manifests ($(date -u +%Y-%m-%d))"
+          git push -f origin "HEAD:refs/heads/$BRANCH"
+
+          if gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json number --jq .number >/dev/null 2>&1; then
+            echo "PR already exists for '$BRANCH'; branch updated in place."
           else
-            git diff --staged
-            git commit -m "auto: bump upstream manifests ($(date -u +%Y-%m-%d))"
-            git push
+            gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
+              --title "auto: update manifests ($(date -u +%Y-%m-%d))" \
+              --body "Automated manifest update produced by the auto-update workflow.
+
+          - Only files under \`bucket/\` are included.
+          - Run the validation workflow, review upstream release notes, then merge manually."
           fi
