@@ -118,6 +118,10 @@
     "  $out = ([System.BitConverter]::ToString([System.Text.Encoding]::UTF8.GetBytes($json))).Replace('-', '').ToLower()",
     "  Set-Content -Path $pd -Value $out -NoNewline -Encoding Ascii -ErrorAction SilentlyContinue",
     "  Write-Host \"Typora: skipUpdate preset to $skip\"",
+    "} catch {}",
+    "# E. shorten install-time notes display (full text stays in the manifest for 'scoop info')",
+    "try {",
+    "  $manifest.notes = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('5bey5YaF572u6L+H5pyf5L+u5aSN5LiO5L6/5pC65YyW77yb5pWw5o2u55uu5b2VIGN1cnJlbnRcVHlwb3JhRGF0Ye+8iEMg55uY5LuF6IGU5o6l77yM5Y246L295Lya5LiA5bm25Yig6Zmk77yJ44CCCuWujOaVtOivtOaYju+8iOabtOaWsOOAgeWNuOi9veOAgeaVsOaNruOAgeWPjOaetuaehO+8ie+8mnNjb29wIGluZm8gYmFvYmFvLWFwcHMvdHlwb3JhMC4xMS4xOA=='))",
     "} catch {}"
   ],
   "pre_uninstall": [
