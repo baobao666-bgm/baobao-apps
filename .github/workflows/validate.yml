@@ -51,6 +51,9 @@ jobs:
       - name: Hook fixture tests (sandboxed migrations / junctions / registry)
         shell: powershell
         run: .\.github\scripts\test\hook-tests.ps1
+      - name: Shortcut diagnostics (TEMPORARY - remove after root cause fix)
+        shell: powershell
+        run: .\.github\scripts\test\debug-shortcut.ps1
       - name: End-to-end lifecycle test
         shell: powershell
         run: .\.github\scripts\e2e-test.ps1 -ScoopDir 'C:\scoop-e2e'

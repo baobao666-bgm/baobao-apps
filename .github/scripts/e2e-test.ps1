@@ -49,11 +49,38 @@ function Run-Scoop([string[]]$scoopArgs) {
     $cmd = Join-Path $ScoopDir 'shims\scoop.cmd'
     if (-not (Test-Path -LiteralPath $cmd)) { throw "scoop shim not found at $cmd" }
     Write-Host ("  > scoop " + ($scoopArgs -join ' '))
-    $out = & $cmd @scoopArgs 2>&1 | Out-String
-    $code = $LASTEXITCODE
+    # Capture the FULL child output: with $ErrorActionPreference=Stop a native
+    # stderr record would otherwise abort the pipeline and swallow stdout.
+    $logFile = Join-Path $env:TEMP ('scoop-e2e-{0}.log' -f ([guid]::NewGuid().ToString('N').Substring(0, 8)))
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        $out = & $cmd @scoopArgs 2>&1 | Out-String
+        $code = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+    if ($out.Trim()) { [System.IO.File]::WriteAllText($logFile, [string]$out, $utf8) }
     if ($out.Trim()) { Write-Host $out.Trim() }
-    if ($code -ne 0) { throw ("scoop {0} failed with exit code {1}" -f ($scoopArgs -join ' '), $code) }
+    if ($code -ne 0) {
+        throw ("scoop {0} failed with exit code {1} (full output above; also kept at {2})" -f ($scoopArgs -join ' '), $code, $logFile)
+    }
     return $out
+}
+function Get-RegDenyInfo([string]$SubKey) {
+    # read the ACL through a handle that only needs WRITE_DAC + READ_CONTROL,
+    # which works even while the key carries deny rules (plain Get-Acl does not)
+    $key = $null
+    try {
+        $key = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($SubKey, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, ([System.Security.AccessControl.RegistryRights]::ChangePermissions -bor [System.Security.AccessControl.RegistryRights]::ReadPermissions))
+    } catch {}
+    if (-not $key) { return $null }
+    $n = 0
+    foreach ($r in @($key.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
+        if ($r.AccessControlType -eq 'Deny') { $n++ }
+    }
+    $key.Close()
+    return @{ DenyCount = $n }
 }
 function Read-HexJson([string]$path) {
     $hex = [System.IO.File]::ReadAllText($path, $utf8).Trim()
@@ -97,13 +124,10 @@ if ($pd) {
     Assert ($pd.enableAutoUpdate -eq $false) 'profile.data: enableAutoUpdate=false'
     Assert ($null -ne $pd.skipUpdate) 'profile.data: skipUpdate set'
 }
-$regPath = 'HKCU:\SOFTWARE\Typora'
-$acl = $null
-try { $acl = Get-Acl $regPath } catch {}
-Assert ($null -ne $acl) 'registry key exists (ACL readable)'
-if ($acl) {
-    $denies = @($acl.Access | Where-Object { $_.AccessControlType -eq 'Deny' })
-    Assert ($denies.Count -ge 4) "registry deny rules present (count=$($denies.Count))"
+$reg = Get-RegDenyInfo 'SOFTWARE\Typora'
+Assert ($null -ne $reg) 'registry key exists (ACL readable through a ChangePermissions handle)'
+if ($reg) {
+    Assert ($reg.DenyCount -ge 4) "registry deny rules present (count=$($reg.DenyCount))"
 }
 $readDenied = $false
 try { $null = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey('SOFTWARE\Typora') } catch { $readDenied = $true }
@@ -114,17 +138,17 @@ Set-Content -Path (Join-Path $typoraLink 'marker.txt') -Value 'keep-me' -Encodin
 Run-Scoop @('update', '-f', 'typora0.11.18') | Out-Null
 Test-Junction $typoraLink $typoraTarget 'typora after force-update'
 Assert (Test-Path (Join-Path $typoraLink 'marker.txt')) 'user data survived force update'
-$acl2 = $null
-try { $acl2 = Get-Acl $regPath } catch {}
-Assert ($null -ne $acl2) 'registry handling re-applied after force update'
+$reg2 = Get-RegDenyInfo 'SOFTWARE\Typora'
+Assert ($null -ne $reg2) 'registry handling re-applied after force update'
+if ($reg2) {
+    Assert ($reg2.DenyCount -ge 4) "registry deny rules re-applied (count=$($reg2.DenyCount))"
+}
 
 Step 'typora0.11.18: normal uninstall keeps persist data, removes junction + registry key'
 Run-Scoop @('uninstall', 'typora0.11.18') | Out-Null
 Assert (-not (Test-Path -LiteralPath $typoraLink)) 'junction removed on uninstall'
 Assert (Test-Path (Join-Path $typoraTarget 'marker.txt')) 'persist data kept on normal uninstall'
-$after = $null
-try { $after = Get-Acl $regPath } catch {}
-Assert ($null -eq $after) 'registry key removed on uninstall (was created by the package)'
+Assert ($null -eq (Get-RegDenyInfo 'SOFTWARE\Typora')) 'registry key removed on uninstall (was created by the package)'
 
 Step 'typora0.11.18: reinstall reuses persist data, then -p purges'
 Run-Scoop @('install', 'baobao-test/typora0.11.18') | Out-Null
