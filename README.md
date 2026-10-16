@@ -1,12 +1,13 @@
 # baobao-apps — 浏览器工具集的 Scoop 桶（Windows）
 
-一个 Scoop bucket，把「指纹浏览器内核 + 本地管理器 + 常用浏览器」封装成可一键安装、可自动更新、换机即用的三个包：
+一个 Scoop bucket，把「指纹浏览器内核 + 本地管理器 + 常用浏览器 + Markdown 编辑器」封装成可一键安装、换机即用的四个包（其中 typora0.11.18 为静态免付费旧版，不参与自动更新）：
 
 | 包 | 上游 | 作用 | License |
 |---|---|---|---|
 | `fingerprint-chromium` | [adryfish/fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) | 指纹内核：基于 Ungoogled Chromium 的 C++ 级指纹补丁，32 位 seed 确定性指纹，可伪装成真 Chrome（User-Agent / Client Hints 均报 Chrome） | BSD-3-Clause |
 | `OpenBrowser` | [sheying2013/OpenBrowser](https://github.com/sheying2013/OpenBrowser)（原 lyu0805/OpenBrowser） | 管理器：多环境隔离、代理 / 指纹 / 扩展管理、窗口同步、本地 RPA、Local API + MCP（`127.0.0.1:50325`），内置 Wayfern 内核开箱即用 | MIT |
 | `Twinkstar` | [www.twinkstar.com](https://www.twinkstar.com/)（星愿浏览器官网） | 星愿浏览器：Chromium 内核，内置漫画阅读模式、视频下载 / 弹窗播放、鼠标手势、超级拖拽、多线程下载，兼容 Chrome 扩展 | Freeware（免费软件） |
+| `typora0.11.18` | [typora.io](https://typora.io/)（0.11.18 免付费旧版） | Markdown 编辑器：所见即所得（WYSIWYG）；内置过期弹窗修复与更新提示屏蔽 | Proprietary（上游） |
 
 ## 前置要求
 
@@ -23,6 +24,7 @@ scoop bucket add baobao-apps https://github.com/baobao666-bgm/baobao-apps
 scoop install baobao-apps/fingerprint-chromium   # 指纹内核（小，秒装）
 scoop install baobao-apps/OpenBrowser            # 管理器（约 1.1 GB，稍慢）
 scoop install baobao-apps/Twinkstar              # 星愿浏览器（约 125 MB）
+scoop install baobao-apps/typora0.11.18          # Typora Markdown 编辑器（约 68 MB，内置过期修复）
 ```
 
 装完即可获得以下入口：
@@ -30,6 +32,7 @@ scoop install baobao-apps/Twinkstar              # 星愿浏览器（约 125 MB�
 - `chrome` → fingerprint-chromium 的 `chrome.exe`（指纹内核，可加指纹参数直启）
 - `OpenBrowser` → 管理器主程序
 - `twinkstar` → 星愿浏览器主程序（开始菜单同时会有「星愿浏览器」快捷方式；浏览器数据保存在 `%LOCALAPPDATA%\Twinkstar`，`scoop update` 不受影响）
+- `typora` → Typora Markdown 编辑器主程序（开始菜单同时会有「Typora」快捷方式）
 
 ## 把 OpenBrowser 的内核指向指纹内核
 
@@ -67,6 +70,7 @@ scoop checkup     # 健康检查
 
 - **自动更新（CI）**：本桶的 GitHub Actions 每天 06:00 UTC 检查各上游最新版本（GitHub Releases 与星愿官网，官网抓取带浏览器 UA），自动更新 manifest 的 `version / url / hash` 并回写本仓库；也可在 [Actions](https://github.com/baobao666-bgm/baobao-apps/actions) 页面手动 Run workflow 立即刷新。
 - **安装目录兼容修补**：OpenBrowser 包在安装时会自动修补主程序，使其在以 junction / 符号链接方式链接安装目录的环境（例如 Scoop 的 `current` 目录）中正常工作，避免「本地设置」页按钮报错 `untrusted IPC document`；`scoop update` 重新拉取新版后，该修补会在 `pre_install` 阶段自动重新应用，无需手工处理。
+- **内置修复说明（typora0.11.18）**：该包在安装时会预置注册表 `HKCU\SOFTWARE\Typora` 的 `IDate` 并设置拒绝读写权限（保留权限管理能力），消除「This beta version of Typora is expired」过期弹窗；同时预置用户配置（`%APPDATA%\Typora\profile.data`，已存在时合并、不覆盖个人设置）关闭「自动检查更新」并跳过 1.14.10 版本，启动时不再弹出更新提示。卸载时会自动结束 Typora 进程、还原注册表权限并清理注册表项。因上游 0.11.18 为静态免付费旧版，本包不参与 CI 自动更新。
 - **星愿浏览器解包说明**：星愿的安装包是带签名尾部的 NSIS（7-Zip 无法自动识别格式），manifest 以 `-tNsis` 显式解包并取出其中的完整程序文件，安装过程不写注册表、不弹安装向导。
 
 ## 常见问题
@@ -82,3 +86,4 @@ scoop checkup     # 健康检查
 - `fingerprint-chromium`：BSD-3-Clause（上游）
 - `OpenBrowser`：MIT（上游）
 - `Twinkstar`：免费软件（上游）
+- `typora0.11.18`：Proprietary（上游旧版）
