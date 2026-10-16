@@ -17,7 +17,7 @@
 
 ```powershell
 # 1. 添加本桶（公开仓库，无需 token）
-scoop bucket add baobao-apps https://github.com/baobao666-bgm/baobao-apps.git
+scoop bucket add baobao-apps https://github.com/baobao666-bgm/baobao-apps
 
 # 2. 安装
 scoop install baobao-apps/fingerprint-chromium   # 指纹内核（小，秒装）
