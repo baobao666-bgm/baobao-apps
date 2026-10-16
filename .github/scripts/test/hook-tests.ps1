@@ -45,7 +45,16 @@ function Get-LinkTargetString([string]$path) {
 }
 function Norm([string]$p) {
     if ([string]::IsNullOrEmpty($p)) { return '' }
-    return ($p -replace '^\\\\\?\\', '').TrimEnd('\').ToLowerInvariant()
+    $t = $p -replace '^\\\\\?\\', ''
+    # canonicalize 8.3 short names (e.g. RUNNER~1 on CI) before comparing
+    try { $t = [System.IO.Path]::GetFullPath($t) } catch {}
+    if (Test-Path -LiteralPath $t) {
+        try {
+            $full = (Get-Item -LiteralPath $t -Force).FullName
+            if ($full) { $t = $full }
+        } catch {}
+    }
+    return ($t -replace '^\\\\\?\\', '').TrimEnd('\').ToLowerInvariant()
 }
 function Invoke-Hook {
     param([string]$Text, [string]$Dir, [string]$OriginalDir, [string]$PersistDir)
@@ -233,6 +242,7 @@ try {
     New-Item -ItemType Directory -Path $dir7, (Join-Path $pers7 'UserData') -Force | Out-Null
     New-TestFile (Join-Path $pers7 'UserData\marker.txt') 'keep me'
     $jl7 = Join-Path $env:LOCALAPPDATA 'Twinkstar'
+    Reset-Path $jl7
     New-Item -Path $jl7 -ItemType Junction -Value (Join-Path $pers7 'UserData') | Out-Null
     $r = Invoke-Hook -Text $tsPre -Dir $dir7 -OriginalDir $dir7 -PersistDir $pers7
     Check (-not $r.Threw) "no exception ($($r.Error))"
@@ -247,6 +257,7 @@ try {
     $other8 = Join-Path $c8 'elsewhere'
     New-Item -ItemType Directory -Path $dir8, $pers8, $other8 -Force | Out-Null
     $jl8 = Join-Path $env:LOCALAPPDATA 'Twinkstar'
+    Reset-Path $jl8
     New-Item -Path $jl8 -ItemType Junction -Value $other8 | Out-Null
     $r = Invoke-Hook -Text $tsPre -Dir $dir8 -OriginalDir $dir8 -PersistDir $pers8
     Check (-not $r.Threw) 'no exception'
