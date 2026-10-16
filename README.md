@@ -1,6 +1,6 @@
 # baobao-apps
 
-> **声明**：作者水平有限（实则完全不懂😂），因习惯使用 Scoop 管理软件顾开发本项目。本项目由 WorkBuddy（Deepseek-V4.1-Flash）创建执行，项目查错改进方案由 GPT-6.1 Sol 驱动。
+> **声明**：作者水平有限（实则完全不懂😂），因习惯使用 Scoop 管理软件顾开发本项目。项目自用为主，若帮到同道朋友老怀甚慰。本项目由 WorkBuddy（Deepseek-V4.1-Flash）创建执行，查错改进由 GPT-6.1 Sol 驱动。
 
 [![validate](https://github.com/baobao666-bgm/baobao-apps/actions/workflows/validate.yml/badge.svg)](https://github.com/baobao666-bgm/baobao-apps/actions/workflows/validate.yml)
 [![auto-update](https://github.com/baobao666-bgm/baobao-apps/actions/workflows/auto-update.yml/badge.svg)](https://github.com/baobao666-bgm/baobao-apps/actions/workflows/auto-update.yml)
