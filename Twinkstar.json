@@ -1,6 +1,6 @@
 {
   "version": "11.5.1000.2609",
-  "description": "Twinkstar Browser (星愿浏览器) - Chromium-based browser with built-in comic reader mode, video downloader/popup player, mouse gestures, super drag, multi-threaded download and full Chrome extension support.",
+  "description": "星愿浏览器（Twinkstar Browser）：基于 Chromium 内核的免费浏览器，内置漫画阅读模式、视频下载 / 弹窗播放、鼠标手势、超级拖拽、多线程下载，兼容 Chrome 扩展。",
   "homepage": "https://www.twinkstar.com/",
   "license": "Freeware",
   "url": "https://d1.twinkstar.com/win/Twinkstar_v11.5.1000.2609_Release.exe#/dl.exe",
@@ -22,7 +22,7 @@
   "bin": [
     "twinkstar.exe"
   ],
-  "notes": "x64 only. User data lives in %LOCALAPPDATA%\\Twinkstar (survives scoop updates). If the browser exits immediately at launch with repeated 'GPU process exited unexpectedly' errors (seen on some trimmed or older-driver systems), append --disable-gpu-sandbox to the launch command.",
+  "notes": "仅支持 x64。浏览器数据保存在 %LOCALAPPDATA%\\Twinkstar（scoop 更新不受影响）。若启动即退出并反复报 'GPU process exited unexpectedly'（部分精简系统或旧显卡驱动环境），在启动命令末尾追加 --disable-gpu-sandbox 即可解决。",
   "checkver": {
     "useragent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
     "url": "https://www.twinkstar.com/",

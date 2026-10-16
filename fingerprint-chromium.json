@@ -1,6 +1,6 @@
 {
   "version": "150.0.7871.186",
-  "description": "Open source fingerprint browser based on Ungoogled Chromium (C++-level, seed-deterministic, can report as real Chrome).",
+  "description": "开源指纹浏览器内核：基于 Ungoogled Chromium 的 C++ 级指纹补丁，32 位 seed 确定性指纹，可伪装成真实 Chrome（User-Agent / Client Hints 均报 Chrome）。",
   "homepage": "https://github.com/adryfish/fingerprint-chromium",
   "license": "BSD-3-Clause",
   "url": "https://github.com/adryfish/fingerprint-chromium/releases/download/150.0.7871.186/ungoogled-chromium_150.0.7871.186-1.1_windows_x64.zip",
@@ -11,5 +11,5 @@
   ],
   "pre_install": "Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \"$dir*\" } | Stop-Process -Force -ErrorAction SilentlyContinue; $sub = Get-ChildItem \"$dir\" -Directory | Where-Object { $_.Name -match 'ungoogled-chromium_' }; foreach ($s in $sub) { Move-Item \"$($s.FullName)\\*\" $dir -Force; Remove-Item $s.FullName -Force -Recurse }",
   "post_uninstall": "Get-Process chrome -ErrorAction SilentlyContinue | Where-Object { $_.Path -like \"*$dir*\" } | Stop-Process -Force -ErrorAction SilentlyContinue",
-  "notes": "Enable fingerprinting with: chrome.exe --fingerprint <32-bit-seed> --fingerprint-platform windows --fingerprint-brand Chrome --timezone <IANA-tz>. Point OpenBrowser's kernel path at: <scoop dir>\\fingerprint-chromium\\current\\chrome.exe"
+  "notes": "启用指纹：chrome.exe --fingerprint <32位seed> --fingerprint-platform windows --fingerprint-brand Chrome --timezone <IANA时区>。配合 OpenBrowser 使用时，「自定义内核」指向：<scoop根目录>\\fingerprint-chromium\\current\\chrome.exe"
 }
