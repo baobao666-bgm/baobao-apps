@@ -1,4 +1,4 @@
-# Auto-update the two manifests when upstream releases new versions.
+# Auto-update the manifests when upstream releases new versions.
 # 档位3: GitHub bucket + CI 免手动维护 URL/sha256。
 # - 每日 06:00 UTC 自动检查
 # - 也可在 Actions 页手动 Run workflow（workflow_dispatch）

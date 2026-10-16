@@ -1,11 +1,12 @@
-# baobao-apps — 开源指纹浏览器套件的 Scoop 桶（Windows）
+# baobao-apps — 浏览器工具集的 Scoop 桶（Windows）
 
-一个 Scoop bucket，把「指纹浏览器内核 + 本地管理器」封装成可一键安装、可自动更新、换机即用的两个包：
+一个 Scoop bucket，把「指纹浏览器内核 + 本地管理器 + 常用浏览器」封装成可一键安装、可自动更新、换机即用的三个包：
 
 | 包 | 上游 | 作用 | License |
 |---|---|---|---|
 | `fingerprint-chromium` | [adryfish/fingerprint-chromium](https://github.com/adryfish/fingerprint-chromium) | 指纹内核：基于 Ungoogled Chromium 的 C++ 级指纹补丁，32 位 seed 确定性指纹，可伪装成真 Chrome（User-Agent / Client Hints 均报 Chrome） | BSD-3-Clause |
 | `OpenBrowser` | [sheying2013/OpenBrowser](https://github.com/sheying2013/OpenBrowser)（原 lyu0805/OpenBrowser） | 管理器：多环境隔离、代理 / 指纹 / 扩展管理、窗口同步、本地 RPA、Local API + MCP（`127.0.0.1:50325`），内置 Wayfern 内核开箱即用 | MIT |
+| `Twinkstar` | [www.twinkstar.com](https://www.twinkstar.com/)（星愿浏览器官网） | 星愿浏览器：Chromium 内核，内置漫画阅读模式、视频下载 / 弹窗播放、鼠标手势、超级拖拽、多线程下载，兼容 Chrome 扩展 | Freeware（免费软件） |
 
 ## 前置要求
 
@@ -21,12 +22,14 @@ scoop bucket add baobao-apps https://github.com/baobao666-bgm/baobao-apps.git
 # 2. 安装
 scoop install baobao-apps/fingerprint-chromium   # 指纹内核（小，秒装）
 scoop install baobao-apps/OpenBrowser            # 管理器（约 1.1 GB，稍慢）
+scoop install baobao-apps/Twinkstar              # 星愿浏览器（约 125 MB）
 ```
 
-装完即可获得两个命令：
+装完即可获得以下入口：
 
 - `chrome` → fingerprint-chromium 的 `chrome.exe`（指纹内核，可加指纹参数直启）
 - `OpenBrowser` → 管理器主程序
+- `twinkstar` → 星愿浏览器主程序（开始菜单同时会有「星愿浏览器」快捷方式；浏览器数据保存在 `%LOCALAPPDATA%\Twinkstar`，`scoop update` 不受影响）
 
 ## 把 OpenBrowser 的内核指向指纹内核
 
@@ -62,17 +65,20 @@ scoop update *    # 跟随上游 release 自动更新
 scoop checkup     # 健康检查
 ```
 
-- **自动更新（CI）**：本桶的 GitHub Actions 每天 06:00 UTC 检查两个上游的最新 release，自动更新 manifest 的 `version / url / sha256` 并回写本仓库；也可在 [Actions](https://github.com/baobao666-bgm/baobao-apps/actions) 页面手动 Run workflow 立即刷新。
+- **自动更新（CI）**：本桶的 GitHub Actions 每天 06:00 UTC 检查各上游最新版本（GitHub Releases 与星愿官网，官网抓取带浏览器 UA），自动更新 manifest 的 `version / url / hash` 并回写本仓库；也可在 [Actions](https://github.com/baobao666-bgm/baobao-apps/actions) 页面手动 Run workflow 立即刷新。
 - **安装目录兼容修补**：OpenBrowser 包在安装时会自动修补主程序，使其在以 junction / 符号链接方式链接安装目录的环境（例如 Scoop 的 `current` 目录）中正常工作，避免「本地设置」页按钮报错 `untrusted IPC document`；`scoop update` 重新拉取新版后，该修补会在 `pre_install` 阶段自动重新应用，无需手工处理。
+- **星愿浏览器解包说明**：星愿的安装包是带签名尾部的 NSIS（7-Zip 无法自动识别格式），manifest 以 `-tNsis` 显式解包并取出其中的完整程序文件，安装过程不写注册表、不弹安装向导。
 
 ## 常见问题
 
 - **「本地设置」页按钮无反应 / 报 `untrusted IPC document`**：安装或更新会自动应用上述修补；若仍出现，请完全退出 OpenBrowser 后重新执行 `scoop install baobao-apps/OpenBrowser`（幂等覆盖安装）。
 - **更新时报文件占用 / 无法删除旧版本**：先通过托盘图标完全退出 OpenBrowser，再执行 `scoop update`。
 - **内核状态区一直「未选择」**：需先在 OpenBrowser 内完成一次内核下载或自定义内核选择，管理器才会真正调度指纹内核。
+- **星愿浏览器一启动就闪退（日志报 `GPU process exited unexpectedly`）**：个别精简系统或旧显卡驱动环境下，星愿浏览器的 GPU 进程沙箱初始化失败会导致浏览器直接退出（fingerprint-chromium 等常规 Chromium 内核浏览器不受影响）。给快捷方式「目标」末尾追加 `--disable-gpu-sandbox`（或命令行执行 `twinkstar --disable-gpu-sandbox`）即可正常使用；升级显卡驱动也可能根治。
 
 ## 许可
 
 - 本桶（manifest / 脚本 / CI）：**0BSD**
 - `fingerprint-chromium`：BSD-3-Clause（上游）
 - `OpenBrowser`：MIT（上游）
+- `Twinkstar`：免费软件（上游）

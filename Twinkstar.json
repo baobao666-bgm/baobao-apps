@@ -1,0 +1,34 @@
+{
+  "version": "11.5.1000.2609",
+  "description": "Twinkstar Browser (星愿浏览器) - Chromium-based browser with built-in comic reader mode, video downloader/popup player, mouse gestures, super drag, multi-threaded download and full Chrome extension support.",
+  "homepage": "https://www.twinkstar.com/",
+  "license": "Freeware",
+  "url": "https://d1.twinkstar.com/win/Twinkstar_v11.5.1000.2609_Release.exe#/dl.exe",
+  "hash": "1d61bf94abc9ffd9d414aa17b221e7b952ef7e536df3cb8cb52ffea37afbaf20",
+  "architecture": "x64",
+  "installer": {
+    "script": [
+      "Expand-7zipArchive \"$dir\\dl.exe\" \"$dir\\_unpack\" -Switches '-tNsis' -Removal",
+      "Move-Item \"$dir\\_unpack\\`$PLUGINSDIR\\tw_data\\*\" \"$dir\" -Force",
+      "Remove-Item \"$dir\\_unpack\" -Recurse -Force"
+    ]
+  },
+  "shortcuts": [
+    [
+      "twinkstar.exe",
+      "星愿浏览器"
+    ]
+  ],
+  "bin": [
+    "twinkstar.exe"
+  ],
+  "notes": "x64 only. User data lives in %LOCALAPPDATA%\\Twinkstar (survives scoop updates). If the browser exits immediately at launch with repeated 'GPU process exited unexpectedly' errors (seen on some trimmed or older-driver systems), append --disable-gpu-sandbox to the launch command.",
+  "checkver": {
+    "useragent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.0.0 Safari/537.36",
+    "url": "https://www.twinkstar.com/",
+    "regex": "Twinkstar_v([\\d.]+)_Release\\.exe"
+  },
+  "autoupdate": {
+    "url": "https://d1.twinkstar.com/win/Twinkstar_v$version_Release.exe#/dl.exe"
+  }
+}
