@@ -32,7 +32,7 @@ scoop install baobao-apps/typora0.11.18 --arch 32bit   # 如需 32 位版本
 
 - `chrome` → fingerprint-chromium 的 `chrome.exe`（指纹内核，可加指纹参数直启）
 - `OpenBrowser` → 管理器主程序
-- `twinkstar` → 星愿浏览器主程序（开始菜单同时会有「星愿浏览器」快捷方式）
+- `twinkstar` → 星愿浏览器主程序（开始菜单同时会有「星愿浏览器」快捷方式；该名称为中文，在非中文 ANSI 代码页的系统上会因 WScript.Shell 平台限制被跳过，不影响使用）
 - `typora` → Typora Markdown 编辑器主程序（开始菜单同时会有「Typora」快捷方式）
 
 ## 数据与卸载

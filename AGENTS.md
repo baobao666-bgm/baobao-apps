@@ -47,6 +47,11 @@
 - 安装修复类命令必须符合 Scoop 实际行为：同版本重复 `scoop install` **不会**重装，应使用 `scoop update -f baobao-apps/<app>`。
 - 保留原有的有效说明（用法、参数、路径），仅修正过时内容或追加必要说明。
 
+## 已知平台怪癖
+
+- Start Menu 快捷方式名含非 ASCII 字符（如「星愿浏览器」）时，Scoop 内部的 WScript.Shell 会按**系统 ANSI 代码页**做文件名转换：在非对应代码页的系统（如英文系统的 CI runner）上会保存失败并被跳过——stderr 出现一条非致命错误，**安装本身照常成功**；中文系统上正常创建。属平台限制，无需"修复"；CI 的 E2E 已按此预期放行。
+- Scoop 的 `scoop install` 在同版本重复执行时不会重装（提示改用 `scoop update`）；重跑安装钩子必须用 `scoop update -f`。
+
 ## 验证要求
 
 提交前必须通过仓库 CI（`.github/workflows/validate.yml`）：
