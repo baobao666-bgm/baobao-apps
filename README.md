@@ -6,7 +6,7 @@
 [![auto-update](https://github.com/baobao666-bgm/baobao-apps/actions/workflows/auto-update.yml/badge.svg)](https://github.com/baobao666-bgm/baobao-apps/actions/workflows/auto-update.yml)
 [![license: 0BSD](https://img.shields.io/badge/license-0BSD-blue)](LICENSE)
 
-面向 Windows 的 [Scoop](https://scoop.sh) **补充桶（supplementary bucket）**：收录主流桶（Main、Extras、Versions、Nirsoft 等）没有收录的软件，或同一软件的特定变体 / 免费旧版本，为主流桶查漏补缺。
+面向 Windows 的 [Scoop](https://scoop.sh) **补充桶（supplementary bucket）**：收录主流桶（Main、Extras、Versions 等）没有收录的软件，或同一软件的特定变体 / 免费旧版本，为主流桶查漏补缺。
 
 ## 为什么用这个桶
 
