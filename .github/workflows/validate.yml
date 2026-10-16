@@ -1,0 +1,56 @@
+# Read-only validation for PRs and main:
+#  - Node logic tests for the hardened update script
+#  - Manifest JSON + Scoop schema validation (vendored schema under .github/schema/)
+#  - PowerShell AST syntax check for every embedded hook script
+#  - Windows end-to-end lifecycle test (install / force-update / junction / persist / uninstall)
+name: validate
+
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: validate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Node syntax check (update.js)
+        run: node --check .github/scripts/update.js
+      - name: Node logic tests (update.js)
+        run: node --test ".github/scripts/test/*.test.js"
+      - name: Manifest JSON + Scoop schema validation
+        run: |
+          python3 -m pip install --quiet jsonschema
+          python3 .github/scripts/validate_manifests.py
+      - name: PowerShell syntax check for embedded hooks
+        shell: pwsh
+        run: ./.github/scripts/check-manifests.ps1
+
+  windows-e2e:
+    # Heavy job (downloads all four packages). Runs for PRs, main pushes and manual dispatch.
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24'
+      - name: Hook fixture tests (sandboxed migrations / junctions / registry)
+        shell: powershell
+        run: .\.github\scripts\test\hook-tests.ps1
+      - name: End-to-end lifecycle test
+        shell: powershell
+        run: .\.github\scripts\e2e-test.ps1 -ScoopDir 'C:\scoop-e2e'
