@@ -13,6 +13,8 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write      # 失败时开/更新 issue，而不是只留一行日志
+  actions: write     # 在 bot 分支上 dispatch validate（GITHUB_TOKEN 的 push/PR 事件不会触发工作流）
 
 # 定时与手动触发的运行相互排队，避免并发覆盖
 concurrency:
@@ -32,16 +34,44 @@ jobs:
       - name: Check upstream versions and update manifests
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/update.js
+        run: |
+          set -o pipefail
+          node .github/scripts/update.js 2>&1 | tee /tmp/update.log
+
+      - name: Report the failure as an issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TITLE="auto-update: manual review required"
+          {
+            echo "The manifest check failed at $(date -u '+%Y-%m-%d %H:%M UTC')."
+            echo ""
+            echo '```'
+            tail -n 40 /tmp/update.log 2>/dev/null || true
+            echo '```'
+            echo ""
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > /tmp/issue.md
+          NUM=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$NUM" ]; then
+            gh issue comment "$NUM" --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue.md
+            echo "Commented on existing issue #$NUM."
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file /tmp/issue.md
+          fi
 
       - name: Create or update the update PR
+        id: pr
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if git diff --quiet && git diff --cached --quiet; then
             echo "No manifest changes, nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
           BRANCH="bot/update-manifests"
           git config user.name "scoop-bucket-ci"
@@ -63,3 +93,13 @@ jobs:
           - Only files under \`bucket/\` are included.
           - Run the validation workflow, review upstream release notes, then merge manually."
           fi
+
+      # GITHUB_TOKEN 产生的 push / pull_request 事件不会启动新的工作流，
+      # bot PR 上的必需检查因此永远不会上报。workflow_dispatch 是例外，用它补跑。
+      - name: Trigger validation on the bot branch
+        if: steps.pr.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh workflow run validate.yml --repo "$GITHUB_REPOSITORY" --ref bot/update-manifests
+          echo "Dispatched validate.yml on bot/update-manifests."
