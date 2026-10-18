@@ -424,14 +424,10 @@ const PACKAGES = [
       }
       return matches[0];
     },
-    // 唯一豁免：同版本下仅构建号（-x.y）严格递增时接受（上游会重发同 tag 资产）
-    sameVersionChangeAllowed: (currentUrl, up) => {
-      const ob = fpcBuildFromUrl(currentUrl);
-      const nb = fpcBuildFromUrl(up.url);
-      if (ob === null) return `current url does not match the constrained pattern: ${currentUrl}`;
-      if (nb === null || !(nb > ob)) return `build number not strictly increased (old=${ob}, new=${nb})`;
-      return true;
-    },
+    // 同版本换包不再自动放行（含上游仅递增构建号的重发）：版本号不变时 Scoop
+    // 看不到升级，写进清单只会让已安装用户停在旧包上。这里只提供构建号用于诊断，
+    // 是否接受由人工复核决定。
+    buildFromUrl: fpcBuildFromUrl,
   },
   {
     key: 'OpenBrowser',
@@ -548,16 +544,106 @@ function decideUpdate(p, current, up, sha) {
     }
     return { changed: true, version: up.version, url: up.url, sha };
   }
-  // 同版本、URL 或哈希发生变化
-  if (p.sameVersionChangeAllowed) {
-    const verdict = p.sameVersionChangeAllowed(cur.url, up);
-    if (verdict === true) return { changed: true, version: up.version, url: up.url, sha };
-    throw policyError(`${p.key}: same-version change rejected (${cur.version}): ${verdict}; manual review required`);
+  // 同版本、URL 或哈希发生变化：一律停下，交人工复核
+  let buildNote = '';
+  if (typeof p.buildFromUrl === 'function') {
+    const ob = p.buildFromUrl(cur.url);
+    const nb = p.buildFromUrl(up.url);
+    if (ob !== null && nb !== null) buildNote = ` (build ${ob} -> ${nb})`;
   }
-  throw policyError(`${p.key}: url/hash changed at the same version ${cur.version}; manual review required (possible re-release or mirror swap)`);
+  throw policyError(`${p.key}: url/hash changed at the same version ${cur.version}${buildNote}; manual review required (possible re-release or mirror swap)`);
 }
 
 // ------------------------------------------------------------ 主流程
+/**
+ * 两阶段批处理：先把每个包都检查/下载/校验完，任何一个失败就整体不写；
+ * 全部通过后才落盘。依赖可注入，便于直接测试"整批失败不写入"。
+ * @returns {{failures:number, written:number, results:Array}}
+ */
+async function runBatch(opts = {}) {
+  const packages = opts.packages || PACKAGES;
+  const root = opts.root || ROOT;
+  const token = opts.token || '';
+  const readMf = opts.readManifest || readManifest;
+  const writeMf = opts.writeManifest || writeManifest;
+  const resolve = opts.resolveUpstream || resolveUpstream;
+  const download = opts.downloadToFile || downloadToFile;
+  const magicCheck = opts.checkFileMagic || checkFileMagic;
+  const log = opts.log || ((...a) => console.log(...a));
+  const logError = opts.logError || ((...a) => console.error(...a));
+
+  // 阶段一：全部检查（解析 + 下载 + 校验 + 决策），任何失败不写文件
+  const results = [];
+  for (const p of packages) {
+    const tmpPath = path.join(
+      os.tmpdir(),
+      `scoop-baobao-${p.key}-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.bin`
+    );
+    try {
+      const mfPath = `${root}/${p.manifest}`;
+      const current = readMf(mfPath);
+      const up = await resolve(p, current, { token });
+      let dl;
+      try {
+        dl = await download(up.url, tmpPath);
+        if (up.digest && dl.sha256 !== up.digest) {
+          throw policyError(
+            `${p.key}: sha256 digest mismatch: GitHub reports ${up.digest}, downloaded ${dl.sha256}`
+          );
+        }
+        const magic = magicCheck(tmpPath, p.format);
+        if (!magic.ok) {
+          throw policyError(`${p.key}: unexpected file format (expected ${p.format}); ${magic.detail}`);
+        }
+      } finally {
+        try {
+          fs.rmSync(tmpPath, { force: true });
+        } catch (e) {
+          logError(`  warn: temp file cleanup failed (${tmpPath}): ${e.message}`);
+        }
+      }
+      const plan = decideUpdate(p, current, up, dl.sha256);
+      results.push({ key: p.key, ok: true, plan, upstream: up.version, bytes: dl.bytes });
+    } catch (e) {
+      results.push({ key: p.key, ok: false, error: e.message });
+    }
+  }
+
+  log('\n---- results ----');
+  let failures = 0;
+  for (const r of results) {
+    if (!r.ok) {
+      failures++;
+      logError(`✗ ${r.key}: ${r.error}`);
+    } else if (r.plan.changed) {
+      log(`↑ ${r.key}: ${r.upstream} ready (${r.bytes} bytes)`);
+    } else {
+      log(`= ${r.key}: ${r.upstream} unchanged`);
+    }
+  }
+
+  if (failures > 0) {
+    logError(`\n✗ ${failures} package(s) failed; NOTHING was written. Fix the issues and re-run.`);
+    return { failures, written: 0, results };
+  }
+
+  // 阶段二：全部通过后才写文件，且只写有变化的
+  let written = 0;
+  for (const r of results) {
+    if (!r.plan.changed) continue;
+    const p = packages.find((x) => x.key === r.key);
+    const mfPath = `${root}/${p.manifest}`;
+    const m = readMf(mfPath);
+    setUrlHash(m, r.plan.url, r.plan.sha);
+    m.version = r.plan.version;
+    writeMf(mfPath, m);
+    written++;
+    log(`✓ wrote ${p.manifest} -> ${r.plan.version}`);
+  }
+  log(written ? `\n✓ ${written} manifest(s) updated.` : '\n✓ all up to date, no changes.');
+  return { failures: 0, written, results };
+}
+
 async function main() {
   const keys = PACKAGES.map((p) => p.key);
   if (ONLY && !keys.includes(ONLY)) {
@@ -569,84 +655,15 @@ async function main() {
   console.log(
     `update.js: checking ${selected.length} package(s)${ONLY ? ` (only: ${ONLY})` : ''}${token ? ' [authenticated]' : ' [anonymous api]'}`
   );
-
-  // 阶段一：全部检查（解析 + 下载 + 校验 + 决策），任何失败不写文件
-  const results = [];
-  for (const p of selected) {
-    const tmpPath = path.join(
-      os.tmpdir(),
-      `scoop-baobao-${p.key}-${process.pid}-${Date.now()}-${crypto.randomBytes(4).toString('hex')}.bin`
-    );
-    try {
-      const mfPath = `${ROOT}/${p.manifest}`;
-      const current = readManifest(mfPath);
-      const up = await resolveUpstream(p, current, { token });
-      let dl;
-      try {
-        dl = await downloadToFile(up.url, tmpPath);
-        if (up.digest && dl.sha256 !== up.digest) {
-          throw policyError(
-            `${p.key}: sha256 digest mismatch: GitHub reports ${up.digest}, downloaded ${dl.sha256}`
-          );
-        }
-        const magic = checkFileMagic(tmpPath, p.format);
-        if (!magic.ok) {
-          throw policyError(`${p.key}: unexpected file format (expected ${p.format}); ${magic.detail}`);
-        }
-      } finally {
-        try {
-          fs.rmSync(tmpPath, { force: true });
-        } catch (e) {
-          console.error(`  warn: temp file cleanup failed (${tmpPath}): ${e.message}`);
-        }
-      }
-      const plan = decideUpdate(p, current, up, dl.sha256);
-      results.push({ key: p.key, ok: true, plan, upstream: up.version, bytes: dl.bytes });
-    } catch (e) {
-      results.push({ key: p.key, ok: false, error: e.message });
-    }
-  }
-
-  console.log('\n---- results ----');
-  let failures = 0;
-  let pending = 0;
-  for (const r of results) {
-    if (!r.ok) {
-      failures++;
-      console.error(`✗ ${r.key}: ${r.error}`);
-    } else if (r.plan.changed) {
-      pending++;
-      console.log(`↑ ${r.key}: ${r.upstream} ready (${r.bytes} bytes)`);
-    } else {
-      console.log(`= ${r.key}: ${r.upstream} unchanged`);
-    }
-  }
-
-  if (failures > 0) {
-    console.error(`\n✗ ${failures} package(s) failed; NOTHING was written. Fix the issues and re-run.`);
-    process.exit(1);
-  }
-
-  // 阶段二：全部通过后才写文件，且只写有变化的
-  let written = 0;
-  for (const r of results) {
-    if (!r.plan.changed) continue;
-    const p = PACKAGES.find((x) => x.key === r.key);
-    const mfPath = `${ROOT}/${p.manifest}`;
-    const m = readManifest(mfPath);
-    setUrlHash(m, r.plan.url, r.plan.sha);
-    m.version = r.plan.version;
-    writeManifest(mfPath, m);
-    written++;
-    console.log(`✓ wrote ${p.manifest} -> ${r.plan.version}`);
-  }
-  console.log(written ? `\n✓ ${written} manifest(s) updated.` : '\n✓ all up to date, no changes.');
+  const r = await runBatch({ packages: selected, token });
+  if (r.failures > 0) process.exit(1);
 }
 
 module.exports = {
   PACKAGES,
   cmpVersion,
   decideUpdate,
+  runBatch,
   escapeRegExp,
   checkFileMagic,
   fpcAssetPattern,

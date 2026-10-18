@@ -26,6 +26,17 @@ function tmpFile(name) {
   return path.join(os.tmpdir(), `upd-test-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}-${name}`);
 }
 
+/** 复制两份真实清单到临时根目录，供 runBatch 的读写隔离测试使用。 */
+function makeBatchRoot() {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'upd-batch-'));
+  fs.mkdirSync(path.join(dir, 'bucket'), { recursive: true });
+  const repoRoot = path.join(__dirname, '..', '..', '..');
+  for (const f of ['OpenBrowser.json', 'Twinkstar.json']) {
+    fs.copyFileSync(path.join(repoRoot, 'bucket', f), path.join(dir, 'bucket', f));
+  }
+  return dir;
+}
+
 /** 起一个本地 HTTP 服务并把传输层注入 update.js */
 async function withServer(handler, fn) {
   const sockets = new Set();
@@ -83,7 +94,7 @@ test('decideUpdate：同版本换 URL（无豁免的包）直接拒绝', () => {
   assert.throws(() => upd.decideUpdate(openbrowser, cur, up, 'bb'), /same version/);
 });
 
-test('decideUpdate：fingerprint-chromium 构建号严格递增时放行', () => {
+test('decideUpdate：fpc 同版本仅构建号递增 -> 拒绝，交人工复核', () => {
   const tag = '150.0.7871.186';
   const cur = {
     version: tag,
@@ -94,7 +105,8 @@ test('decideUpdate：fingerprint-chromium 构建号严格递增时放行', () =>
     version: tag,
     url: `https://github.com/adryfish/fingerprint-chromium/releases/download/${tag}/ungoogled-chromium_${tag}-1.2_windows_x64.zip`,
   };
-  assert.equal(upd.decideUpdate(fpc, cur, up, 'bb').changed, true);
+  // 同版本写进清单对已安装用户是空操作，因此不再自动放行
+  assert.throws(() => upd.decideUpdate(fpc, cur, up, 'bb'), /same version .*build 1001 -> 1002/);
 });
 
 test('decideUpdate：fpc 同版本构建号未递增 / URL 形状变化 -> 拒绝', () => {
@@ -108,9 +120,9 @@ test('decideUpdate：fpc 同版本构建号未递增 / URL 形状变化 -> 拒�
     version: tag,
     url: `https://github.com/adryfish/fingerprint-chromium/releases/download/${tag}/ungoogled-chromium_${tag}-1.0_windows_x64.zip`,
   };
-  assert.throws(() => upd.decideUpdate(fpc, cur, lower, 'bb'), /same-version change rejected/);
+  assert.throws(() => upd.decideUpdate(fpc, cur, lower, 'bb'), /same version/);
   const weird = { version: tag, url: 'https://evil.example.com/pkg.zip' };
-  assert.throws(() => upd.decideUpdate(fpc, cur, weird, 'bb'), /same-version change rejected/);
+  assert.throws(() => upd.decideUpdate(fpc, cur, weird, 'bb'), /same version/);
 });
 
 test('decideUpdate：读取标准 architecture.64bit 布局（含大小写归一）', () => {
@@ -346,6 +358,73 @@ test('downloadToFile：无数据超时（idle）', async () => {
     );
   });
   fs.rmSync(dest, { force: true });
+});
+
+// ------------------------------------------------------------------ 批次事务
+test('runBatch：任一包失败时整批不写入', async () => {
+  const dir = makeBatchRoot();
+  const beforeOb = fs.readFileSync(path.join(dir, 'bucket/OpenBrowser.json'), 'utf8');
+  const beforeTs = fs.readFileSync(path.join(dir, 'bucket/Twinkstar.json'), 'utf8');
+  const res = await upd.runBatch({
+    root: dir,
+    packages: [openbrowser, twinkstar],
+    log: () => {},
+    logError: () => {},
+    checkFileMagic: () => ({ ok: true, detail: 'injected' }),
+    resolveUpstream: async (p) => {
+      if (p.key === 'twinkstar') throw new Error('upstream exploded');
+      return { version: '99.0.0', url: 'https://example.com/ob.zip', digest: null };
+    },
+    downloadToFile: async () => ({ sha256: 'a'.repeat(64), bytes: 123, finalUrl: 'https://example.com/ob.zip' }),
+  });
+  assert.equal(res.failures, 1);
+  assert.equal(res.written, 0);
+  assert.equal(fs.readFileSync(path.join(dir, 'bucket/OpenBrowser.json'), 'utf8'), beforeOb, 'OpenBrowser untouched');
+  assert.equal(fs.readFileSync(path.join(dir, 'bucket/Twinkstar.json'), 'utf8'), beforeTs, 'Twinkstar untouched');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('runBatch：摘要不符时整批不写入', async () => {
+  const dir = makeBatchRoot();
+  const before = fs.readFileSync(path.join(dir, 'bucket/OpenBrowser.json'), 'utf8');
+  const res = await upd.runBatch({
+    root: dir,
+    packages: [openbrowser],
+    log: () => {},
+    logError: () => {},
+    checkFileMagic: () => ({ ok: true, detail: 'injected' }),
+    resolveUpstream: async () => ({
+      version: '99.0.0',
+      url: 'https://example.com/ob.zip',
+      digest: 'f'.repeat(64),
+    }),
+    downloadToFile: async () => ({ sha256: 'a'.repeat(64), bytes: 10, finalUrl: 'https://example.com/ob.zip' }),
+  });
+  assert.equal(res.failures, 1);
+  assert.equal(res.written, 0);
+  assert.match(res.results[0].error, /digest mismatch/);
+  assert.equal(fs.readFileSync(path.join(dir, 'bucket/OpenBrowser.json'), 'utf8'), before, 'manifest untouched');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('runBatch：全部通过才写盘，且只写有变化的包', async () => {
+  const dir = makeBatchRoot();
+  const res = await upd.runBatch({
+    root: dir,
+    packages: [openbrowser],
+    log: () => {},
+    logError: () => {},
+    checkFileMagic: () => ({ ok: true, detail: 'injected' }),
+    resolveUpstream: async () => ({ version: '99.0.0', url: 'https://example.com/ob-99.zip', digest: null }),
+    downloadToFile: async () => ({ sha256: 'b'.repeat(64), bytes: 42, finalUrl: 'https://example.com/ob-99.zip' }),
+  });
+  assert.equal(res.failures, 0);
+  assert.equal(res.written, 1);
+  const after = JSON.parse(fs.readFileSync(path.join(dir, 'bucket/OpenBrowser.json'), 'utf8'));
+  assert.equal(after.version, '99.0.0');
+  assert.equal(after.architecture['64bit'].url, 'https://example.com/ob-99.zip');
+  assert.equal(after.architecture['64bit'].hash, 'b'.repeat(64));
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 // ------------------------------------------------------------------ 魔数校验

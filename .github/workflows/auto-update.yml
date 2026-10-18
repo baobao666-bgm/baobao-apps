@@ -13,6 +13,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  issues: write      # 失败时开/更新 issue，而不是只留一行日志
 
 # 定时与手动触发的运行相互排队，避免并发覆盖
 concurrency:
@@ -32,16 +33,47 @@ jobs:
       - name: Check upstream versions and update manifests
         env:
           GH_TOKEN: ${{ github.token }}
-        run: node .github/scripts/update.js
+        run: |
+          set -o pipefail
+          node .github/scripts/update.js 2>&1 | tee /tmp/update.log
 
-      - name: Create or update the update PR
+      - name: Report the failure as an issue
+        if: failure()
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          TITLE="auto-update: manual review required"
+          {
+            echo "The manifest check failed at $(date -u '+%Y-%m-%d %H:%M UTC')."
+            echo ""
+            echo '```'
+            tail -n 40 /tmp/update.log 2>/dev/null || true
+            echo '```'
+            echo ""
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > /tmp/issue.md
+          NUM=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$NUM" ]; then
+            gh issue comment "$NUM" --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue.md
+            echo "Commented on existing issue #$NUM."
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file /tmp/issue.md
+          fi
+
+      - name: Create or update the update PR
+        id: pr
+        env:
+          # 有 PAT 时用它建 PR：PR 作者是真人，pull_request 事件会正常触发 validate，
+          # 必需检查能挂在 PR 上。只有 GITHUB_TOKEN 时 PR 由 bot 创建，事件被抑制，
+          # 需要在 PR 页点一次 "Approve workflows to run"。
+          GH_TOKEN: ${{ secrets.AUTO_UPDATE_TOKEN || github.token }}
+        run: |
           if git diff --quiet && git diff --cached --quiet; then
             echo "No manifest changes, nothing to do."
+            echo "changed=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
 
           BRANCH="bot/update-manifests"
           git config user.name "scoop-bucket-ci"
@@ -53,8 +85,11 @@ jobs:
           git commit -m "auto: update manifests ($(date -u +%Y-%m-%d))"
           git push -f origin "HEAD:refs/heads/$BRANCH"
 
-          if gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json number --jq .number >/dev/null 2>&1; then
-            echo "PR already exists for '$BRANCH'; branch updated in place."
+          # 只看 OPEN 状态：`gh pr view` 对已关闭的同名 PR 也会命中，会让后续更新
+          # 永远不再开新 PR（只默默改分支）。
+          OPEN_PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$OPEN_PR" ]; then
+            echo "Open PR #$OPEN_PR already exists for '$BRANCH'; branch updated in place."
           else
             gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
               --title "auto: update manifests ($(date -u +%Y-%m-%d))" \
