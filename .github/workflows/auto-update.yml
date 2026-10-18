@@ -85,8 +85,11 @@ jobs:
           git commit -m "auto: update manifests ($(date -u +%Y-%m-%d))"
           git push -f origin "HEAD:refs/heads/$BRANCH"
 
-          if gh pr view "$BRANCH" --repo "$GITHUB_REPOSITORY" --json number --jq .number >/dev/null 2>&1; then
-            echo "PR already exists for '$BRANCH'; branch updated in place."
+          # 只看 OPEN 状态：`gh pr view` 对已关闭的同名 PR 也会命中，会让后续更新
+          # 永远不再开新 PR（只默默改分支）。
+          OPEN_PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
+          if [ -n "$OPEN_PR" ]; then
+            echo "Open PR #$OPEN_PR already exists for '$BRANCH'; branch updated in place."
           else
             gh pr create --repo "$GITHUB_REPOSITORY" --base main --head "$BRANCH" \
               --title "auto: update manifests ($(date -u +%Y-%m-%d))" \
