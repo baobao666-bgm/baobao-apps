@@ -255,6 +255,50 @@ test('429 重试后失败', async () => {
   assert.equal(n, upd.__private.RETRY_LIMIT + 1);
 });
 
+test('总截止时间：重定向的每一跳共享同一份预算', async () => {
+  let hits = 0;
+  await withServer((req, res) => {
+    hits++;
+    setTimeout(() => {
+      if (hits < 4) {
+        res.writeHead(302, { Location: `/h${hits}` });
+        res.end();
+      } else {
+        res.writeHead(200);
+        res.end('done');
+      }
+    }, 90);
+  }, async (base) => {
+    const started = Date.now();
+    // 4 跳 x 90ms = 360ms，预算只有 220ms：旧实现每跳都能领到完整的 30s
+    await assert.rejects(
+      upd.fetchBuffer(`${base}/h0`, { timeoutMs: 220 }),
+      /deadline|total timeout|budget/
+    );
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 1500, `bounded by the shared budget (${elapsed}ms)`);
+  });
+});
+
+test('总截止时间：重试不再重新获得一份完整预算', async () => {
+  let n = 0;
+  await withServer((req, res) => {
+    n++;
+    setTimeout(() => {
+      res.writeHead(503);
+      res.end('boom');
+    }, 150);
+  }, async (base) => {
+    const started = Date.now();
+    await assert.rejects(
+      upd.fetchBuffer(`${base}/x`, { timeoutMs: 250 }),
+      /deadline|total timeout|HTTP 503/
+    );
+    assert.ok(Date.now() - started < 1200, 'bounded by the shared budget');
+    assert.ok(n <= 2, `no request is started after the budget is exhausted (requests=${n})`);
+  });
+});
+
 // ------------------------------------------------------------------ 下载
 test('downloadToFile：成功下载 + sha256 + 字节数', async () => {
   const payload = Buffer.concat([Buffer.from('PK\x03\x04'), crypto.randomBytes(4096)]);

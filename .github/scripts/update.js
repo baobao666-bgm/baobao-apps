@@ -95,6 +95,16 @@ function sleep(ms) {
   return new Promise((r) => setTimeout(r, ms));
 }
 
+/**
+ * 统一截止时间：预算在第一次请求之前算好，重定向、连接、读取和重试都从同一个
+ * 余额里扣，避免"每一跳/每次重试都能重新领到一份完整超时"。
+ */
+function remainingMs(deadline, what) {
+  const left = deadline - Date.now();
+  if (left <= 0) throw timeoutError(`total deadline exceeded before ${what}`);
+  return left;
+}
+
 async function withRetry(desc, fn) {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -141,6 +151,10 @@ function stripAuth(headers) {
  */
 function requestOnce(url, opts = {}) {
   const hop = opts.redirects || 0;
+  const deadline = opts.deadline || 0;
+  if (deadline && deadline - Date.now() <= 0) {
+    return Promise.reject(timeoutError(`total deadline exceeded before requesting ${url}`));
+  }
   let u;
   try {
     u = new URL(url);
@@ -181,8 +195,11 @@ function requestOnce(url, opts = {}) {
       reject(e);
     });
     if (opts.headerTimeoutMs) {
-      req.setTimeout(opts.headerTimeoutMs, () =>
-        req.destroy(timeoutError(`connection/header timeout after ${opts.headerTimeoutMs}ms for ${url}`))
+      const budget = deadline
+        ? Math.max(1, Math.min(opts.headerTimeoutMs, deadline - Date.now()))
+        : opts.headerTimeoutMs;
+      req.setTimeout(budget, () =>
+        req.destroy(timeoutError(`connection/header timeout after ${budget}ms${deadline ? ' (shared total budget)' : ''} for ${url}`))
       );
     }
   });
@@ -191,11 +208,18 @@ function requestOnce(url, opts = {}) {
 /** 拉取元数据（小体积），受总超时与大小上限约束。 */
 async function fetchBuffer(url, opts = {}) {
   const timeoutMs = opts.timeoutMs || META_TIMEOUT_MS;
+  // 预算在第一次请求之前确定，重试与重定向共用同一份余额
+  const deadline = Date.now() + timeoutMs;
   return withRetry(`fetch ${url}`, async () => {
-    const { res } = await requestOnce(url, { headers: opts.headers, headerTimeoutMs: timeoutMs });
+    const left = remainingMs(deadline, `fetch ${url}`);
+    const { res } = await requestOnce(url, {
+      headers: opts.headers,
+      headerTimeoutMs: Math.min(timeoutMs, left),
+      deadline,
+    });
     const totalTimer = setTimeout(
       () => res.destroy(timeoutError(`request exceeded total timeout ${timeoutMs}ms for ${url}`)),
-      timeoutMs
+      Math.max(1, deadline - Date.now())
     );
     try {
       return await new Promise((resolve, reject) => {
@@ -232,15 +256,22 @@ async function fetchBuffer(url, opts = {}) {
 async function downloadToFile(url, destPath, opts = {}) {
   const idleMs = opts.idleTimeoutMs || DL_IDLE_TIMEOUT_MS;
   const totalMs = opts.totalTimeoutMs || DL_TOTAL_TIMEOUT_MS;
+  // 同一份预算覆盖重定向、重试与整个传输过程
+  const deadline = Date.now() + totalMs;
   return withRetry(`download ${url}`, async () => {
-    const { res, finalUrl } = await requestOnce(url, { headers: opts.headers, headerTimeoutMs: idleMs });
+    const left = remainingMs(deadline, `download ${url}`);
+    const { res, finalUrl } = await requestOnce(url, {
+      headers: opts.headers,
+      headerTimeoutMs: Math.min(idleMs, left),
+      deadline,
+    });
     const hash = crypto.createHash('sha256');
     let bytes = 0;
     const out = fs.createWriteStream(destPath);
     let idleTimer = null;
     const totalTimer = setTimeout(
       () => res.destroy(timeoutError(`download exceeded total limit (${totalMs}ms) for ${url}`)),
-      totalMs
+      Math.max(1, deadline - Date.now())
     );
     const bumpIdle = () => {
       if (idleTimer) clearTimeout(idleTimer);
