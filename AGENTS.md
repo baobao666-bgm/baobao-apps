@@ -39,7 +39,9 @@
 - 阻止自动降级；同版本 URL/哈希变化**一律停止**并要求人工核验——包括上游在同一版本下递增构建号（`-x.y`）重发资产的情况：版本号不变时 Scoop 看不到升级，写进清单对已安装用户是空操作。
 - 更新脚本必须整批检查：**任一包失败则本次不写任何清单并以非零退出**；版本/URL/哈希均未变化时不重写文件。
 - 自动更新只创建/更新单个 PR（不直推 main）；`scoop update` 由人工审查合并。
-- `auto-update` 用的是 `GITHUB_TOKEN`：由它产生的 `push` / `pull_request` 事件不会启动工作流，bot PR 的必需检查因此不会自动上报。工作流在推送后会手动 `workflow_dispatch` 一次 `validate.yml`；若检查仍停在 `action_required`，在 PR 页点一次 "Approve workflows to run"。
+- `auto-update` 默认用 `GITHUB_TOKEN`：由它产生的 `pull_request` 事件不会启动工作流，bot PR 的必需检查因此不会上报，PR 会一直停在 `blocked`。**手动 `workflow_dispatch` 补跑没有用**——检查会显示通过，但分支保护不认（实测合并返回 "required status checks are expected"）。
+  - 推荐：在仓库 Secrets 里加 `AUTO_UPDATE_TOKEN`（细粒度 PAT，`contents: write` + `pull-requests: write`）。工作流会自动改用它创建 PR，PR 作者是真人，检查正常触发。
+  - 没有 PAT 时：在 PR 页点一次 "Approve workflows to run"，让那条 `action_required` 的 run 执行。
 - 检查失败时工作流会创建/更新一个 issue（标题 `auto-update: manual review required`），不再只留一行 Actions 日志。
 - `typora0.11.18` 为固定版本，不参与自动更新——它是**唯一**适用专属版本使用限制的包。
 

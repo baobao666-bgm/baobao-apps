@@ -14,7 +14,6 @@ permissions:
   contents: write
   pull-requests: write
   issues: write      # 失败时开/更新 issue，而不是只留一行日志
-  actions: write     # 在 bot 分支上 dispatch validate（GITHUB_TOKEN 的 push/PR 事件不会触发工作流）
 
 # 定时与手动触发的运行相互排队，避免并发覆盖
 concurrency:
@@ -64,7 +63,10 @@ jobs:
       - name: Create or update the update PR
         id: pr
         env:
-          GH_TOKEN: ${{ github.token }}
+          # 有 PAT 时用它建 PR：PR 作者是真人，pull_request 事件会正常触发 validate，
+          # 必需检查能挂在 PR 上。只有 GITHUB_TOKEN 时 PR 由 bot 创建，事件被抑制，
+          # 需要在 PR 页点一次 "Approve workflows to run"。
+          GH_TOKEN: ${{ secrets.AUTO_UPDATE_TOKEN || github.token }}
         run: |
           if git diff --quiet && git diff --cached --quiet; then
             echo "No manifest changes, nothing to do."
@@ -93,13 +95,3 @@ jobs:
           - Only files under \`bucket/\` are included.
           - Run the validation workflow, review upstream release notes, then merge manually."
           fi
-
-      # GITHUB_TOKEN 产生的 push / pull_request 事件不会启动新的工作流，
-      # bot PR 上的必需检查因此永远不会上报。workflow_dispatch 是例外，用它补跑。
-      - name: Trigger validation on the bot branch
-        if: steps.pr.outputs.changed == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh workflow run validate.yml --repo "$GITHUB_REPOSITORY" --ref bot/update-manifests
-          echo "Dispatched validate.yml on bot/update-manifests."
