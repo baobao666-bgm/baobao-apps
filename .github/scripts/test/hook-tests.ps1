@@ -107,6 +107,37 @@ function Clear-TestRegKey {
     } catch {}
     try { [Microsoft.Win32.Registry]::CurrentUser.DeleteSubKeyTree('SOFTWARE\BaobaoPkgTest', $false) } catch {}
 }
+function Get-TestDenyRights {
+    return ([System.Security.AccessControl.RegistryRights]::ReadKey -bor [System.Security.AccessControl.RegistryRights]::QueryValues -bor [System.Security.AccessControl.RegistryRights]::EnumerateSubKeys -bor [System.Security.AccessControl.RegistryRights]::Notify -bor [System.Security.AccessControl.RegistryRights]::SetValue -bor [System.Security.AccessControl.RegistryRights]::CreateSubKey -bor [System.Security.AccessControl.RegistryRights]::Delete -bor [System.Security.AccessControl.RegistryRights]::WriteKey)
+}
+function Add-TestDenyRule([string]$sidStr) {
+    $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($testRegRoot, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, ([System.Security.AccessControl.RegistryRights]::ChangePermissions -bor [System.Security.AccessControl.RegistryRights]::ReadPermissions))
+    if (-not $k) { throw 'test key not available' }
+    $sd = $k.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access)
+    $sid = New-Object System.Security.Principal.SecurityIdentifier($sidStr)
+    $rule = New-Object System.Security.AccessControl.RegistryAccessRule($sid, (Get-TestDenyRights), 'ContainerInherit', 'None', 'Deny')
+    $sd.AddAccessRule($rule)
+    $k.SetAccessControl($sd)
+    $k.Close()
+}
+function Get-TestDenyCountForSid([string]$sidStr) {
+    $k = $null
+    try {
+        $k = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($testRegRoot, [Microsoft.Win32.RegistryKeyPermissionCheck]::ReadWriteSubTree, ([System.Security.AccessControl.RegistryRights]::ChangePermissions -bor [System.Security.AccessControl.RegistryRights]::ReadPermissions))
+    } catch {}
+    if (-not $k) { return -1 }
+    $n = 0
+    foreach ($r in @($k.GetAccessControl([System.Security.AccessControl.AccessControlSections]::Access).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier]))) {
+        if (($r.AccessControlType -eq 'Deny') -and (-not $r.IsInherited) -and ($r.IdentityReference.Value -eq $sidStr)) { $n++ }
+    }
+    $k.Close()
+    return $n
+}
+function Get-HookState([string]$persistDir) {
+    $p = Join-Path $persistDir '.registry-state.json'
+    if (-not (Test-Path -LiteralPath $p)) { return $null }
+    try { return ([System.IO.File]::ReadAllText($p, $utf8) | ConvertFrom-Json) } catch { return $null }
+}
 function Remove-SandboxTree([string]$root) {
     if (-not (Test-Path -LiteralPath $root)) { return }
     $links = @(Get-ChildItem -LiteralPath $root -Recurse -Force -Directory -ErrorAction SilentlyContinue |
@@ -398,6 +429,139 @@ try {
     Check-Eq $content 'zzzz-not-hex' 'profile.data unchanged'
     Check ((Get-LinkTargetString $jl14) -ne $null) 'junction still created'
     Reset-Path $jl14
+
+    # ---------------------------------------------------------------- C18
+    Case 'typora: a deny rule that already existed is never removed by uninstall'
+    Clear-TestRegKey
+    $null = New-Item -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Force
+    Set-ItemProperty -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Name 'IDate' -Value '01/01/2020'
+    Add-TestDenyRule 'S-1-5-32-545'
+    $c18 = New-CaseDir
+    $dir18 = Join-Path $c18 'apps\typora0.11.18\current'
+    $orig18 = Join-Path $c18 'apps\typora0.11.18\0.11.18'
+    $pers18 = Join-Path $c18 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir18, $orig18, $pers18 -Force | Out-Null
+    $jl18 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl18
+    $r = Invoke-Hook -Text $tyPost -Dir $dir18 -OriginalDir $orig18 -PersistDir $pers18
+    Check (-not $r.Threw) "post no exception ($($r.Error))"
+    $st18 = Get-HookState $pers18
+    Check ($null -ne $st18) 'state file written'
+    if ($st18) {
+        Check-Eq ([string]$st18.schemaVersion) '2' 'state schema version'
+        Check-Eq (@($st18.addedRules).Count) 3 'only the three genuinely new rules are recorded as ours'
+        Check (@($st18.preExistingSids) -contains 'S-1-5-32-545') 'pre-existing rule recorded separately'
+    }
+    $r = Invoke-Hook -Text $tyPre -Dir $dir18 -OriginalDir $orig18 -PersistDir $pers18
+    Check (-not $r.Threw) "pre no exception ($($r.Error))"
+    Check-Eq (Get-TestDenyCountForSid 'S-1-5-32-545') 1 'pre-existing deny rule survives the uninstall'
+    Check-Eq (Get-TestDenyCountForSid 'S-1-5-11') 0 'rule added by the package was removed'
+    Clear-TestRegKey
+
+    # ---------------------------------------------------------------- C19
+    Case 'typora: IDate stored as REG_DWORD keeps its value and type after uninstall'
+    Clear-TestRegKey
+    $null = New-Item -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Force
+    $null = New-ItemProperty -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Name 'IDate' -Value 12345 -PropertyType DWord -Force
+    $c19 = New-CaseDir
+    $dir19 = Join-Path $c19 'apps\typora0.11.18\current'
+    $orig19 = Join-Path $c19 'apps\typora0.11.18\0.11.18'
+    $pers19 = Join-Path $c19 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir19, $orig19, $pers19 -Force | Out-Null
+    $jl19 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl19
+    $r = Invoke-Hook -Text $tyPost -Dir $dir19 -OriginalDir $orig19 -PersistDir $pers19
+    Check (-not $r.Threw) "post no exception ($($r.Error))"
+    $st19 = Get-HookState $pers19
+    if ($st19) { Check-Eq ([string]$st19.idateKind) 'DWord' 'value kind recorded as DWord' }
+    $r = Invoke-Hook -Text $tyPre -Dir $dir19 -OriginalDir $orig19 -PersistDir $pers19
+    Check (-not $r.Threw) "pre no exception ($($r.Error))"
+    $k19 = $null
+    try { $k19 = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($testRegRoot) } catch {}
+    Check ($null -ne $k19) 'key readable again after the deny rules were removed'
+    if ($k19) {
+        Check-Eq ([string]$k19.GetValueKind('IDate')) 'DWord' 'IDate restored as REG_DWORD'
+        Check-Eq ([int]$k19.GetValue('IDate')) 12345 'IDate value restored'
+        $k19.Close()
+    }
+    Clear-TestRegKey
+
+    # ---------------------------------------------------------------- C20
+    Case 'typora: corrupt or missing state never triggers a guessed ACL cleanup'
+    Clear-TestRegKey
+    $null = New-Item -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Force
+    $c20 = New-CaseDir
+    $dir20 = Join-Path $c20 'apps\typora0.11.18\current'
+    $orig20 = Join-Path $c20 'apps\typora0.11.18\0.11.18'
+    $pers20 = Join-Path $c20 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir20, $orig20, $pers20 -Force | Out-Null
+    $jl20 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl20
+    $r = Invoke-Hook -Text $tyPost -Dir $dir20 -OriginalDir $orig20 -PersistDir $pers20
+    Check (-not $r.Threw) "post no exception ($($r.Error))"
+    $statePath20 = Join-Path $pers20 '.registry-state.json'
+    Check (Test-Path -LiteralPath $statePath20) 'state file exists before the damage'
+    [System.IO.File]::WriteAllText($statePath20, '{not json', $utf8)
+    $r = Invoke-Hook -Text $tyPre -Dir $dir20 -OriginalDir $orig20 -PersistDir $pers20
+    Check (-not $r.Threw) "pre no exception on corrupt state ($($r.Error))"
+    $reg = Get-TestRegInfo
+    Check ($reg.DenyCount -ge 4) "deny rules left in place on corrupt state (count=$($reg.DenyCount))"
+    Check (Test-Path -LiteralPath $statePath20) 'corrupt state file kept for inspection'
+    Check-Eq ([System.IO.File]::ReadAllText($statePath20, $utf8)) '{not json' 'corrupt state file not overwritten'
+    Remove-Item -LiteralPath $statePath20 -Force
+    $r = Invoke-Hook -Text $tyPre -Dir $dir20 -OriginalDir $orig20 -PersistDir $pers20
+    Check (-not $r.Threw) "pre no exception on missing state ($($r.Error))"
+    $reg = Get-TestRegInfo
+    Check ($reg.DenyCount -ge 4) "deny rules left in place on missing state (count=$($reg.DenyCount))"
+    Check (-not (Test-Path -LiteralPath $statePath20)) 'missing state file is not re-created'
+    Clear-TestRegKey
+
+    # ---------------------------------------------------------------- C21
+    Case 'OpenBrowser post_install: a nested link in the data folder aborts the migration'
+    $c21 = New-CaseDir
+    $dir21 = Join-Path $c21 'apps\OpenBrowser\current'
+    $orig21 = Join-Path $c21 'apps\OpenBrowser\1.0.24'
+    $pers21 = Join-Path $c21 'persist\OpenBrowser'
+    $outside21 = Join-Path $c21 'outside'
+    New-Item -ItemType Directory -Path $dir21, $orig21, $pers21, $outside21 -Force | Out-Null
+    $jl21 = Join-Path $env:APPDATA 'openbrowser'
+    Reset-Path $jl21
+    New-TestFile (Join-Path $jl21 'a.txt') 'keep me'
+    New-TestFile (Join-Path $outside21 'precious.txt') 'MUST-SURVIVE'
+    New-Item -Path (Join-Path $jl21 'nested') -ItemType Junction -Value $outside21 | Out-Null
+    $r = Invoke-Hook -Text $obPost -Dir $dir21 -OriginalDir $orig21 -PersistDir $pers21
+    Check $r.Threw 'threw as expected'
+    Check ($r.Error -match 'nested link') "error names the problem ($($r.Error))"
+    Check ($r.Error -match 'nothing was moved') 'error states that nothing was moved'
+    Check (Test-Path (Join-Path $jl21 'a.txt')) 'source data still intact'
+    Check ((Get-LinkTargetString $jl21) -eq $null) 'source is still a real folder, no junction created'
+    Check (-not (Test-Path (Join-Path $pers21 'UserData\a.txt'))) 'nothing was copied to persist'
+    Check (Test-Path (Join-Path $outside21 'precious.txt')) 'link target untouched'
+    Reset-Path $jl21
+
+    # ---------------------------------------------------------------- C22
+    Case 'typora: a nested link in a legacy data folder aborts the migration'
+    $c22 = New-CaseDir
+    $dir22 = Join-Path $c22 'apps\typora0.11.18\current'
+    $orig22 = Join-Path $c22 'apps\typora0.11.18\0.11.18'
+    $pers22 = Join-Path $c22 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir22, $orig22, $pers22 -Force | Out-Null
+    $legacy22 = Join-Path $orig22 'TyporaData'
+    $outside22 = Join-Path $c22 'outside'
+    New-Item -ItemType Directory -Path $outside22 -Force | Out-Null
+    New-TestFile (Join-Path $legacy22 'old-pref.txt') 'legacy content'
+    New-TestFile (Join-Path $outside22 'precious.txt') 'MUST-SURVIVE'
+    New-Item -Path (Join-Path $legacy22 'nested') -ItemType Junction -Value $outside22 | Out-Null
+    $jl22 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl22
+    New-Item -Path $jl22 -ItemType Junction -Value $legacy22 | Out-Null
+    $r = Invoke-Hook -Text $tyPost -Dir $dir22 -OriginalDir $orig22 -PersistDir $pers22
+    Check $r.Threw 'threw as expected'
+    Check ($r.Error -match 'nested link') "error names the problem ($($r.Error))"
+    Check (Test-Path (Join-Path $legacy22 'old-pref.txt')) 'legacy data intact'
+    Check (Test-Path (Join-Path $outside22 'precious.txt')) 'link target untouched'
+    Check-Eq (Norm (Get-LinkTargetString $jl22)) (Norm $legacy22) 'junction was not repointed'
+    Reset-Path $jl22
 
     # ---------------------------------------------------------------- C15-C17 openbrowser patch
     $obPre = Get-ManifestField 'OpenBrowser.json' 'pre_install'
