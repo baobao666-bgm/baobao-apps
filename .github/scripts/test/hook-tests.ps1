@@ -563,6 +563,20 @@ try {
     Check-Eq (Norm (Get-LinkTargetString $jl22)) (Norm $legacy22) 'junction was not repointed'
     Reset-Path $jl22
 
+    # ---------------------------------------------------------------- C23
+    Case 'process matching: package paths are matched with a separator boundary'
+    $preText = Get-ManifestField 'OpenBrowser.json' 'pre_install'
+    $fnMatch = [regex]::Match($preText, '(?s)function Get-BaobaoProcessPrefix\s*\{.*?\n\}')
+    Check $fnMatch.Success 'prefix helper present in the generated script'
+    if ($fnMatch.Success) {
+        Invoke-Expression $fnMatch.Value
+        $pfx = Get-BaobaoProcessPrefix 'D:\apps\Foo'
+        Check-Eq $pfx 'd:\apps\foo\' 'prefix keeps the trailing separator'
+        Check (('d:\apps\foobar\app.exe').StartsWith($pfx) -eq $false) 'sibling dir sharing the prefix does not match'
+        Check (('d:\apps\foo\current\app.exe').StartsWith($pfx)) 'executable inside the package dir still matches'
+        Check-Eq (Get-BaobaoProcessPrefix 'D:\apps\Foo\') $pfx 'input with a trailing separator is handled'
+    }
+
     # ---------------------------------------------------------------- C15-C17 openbrowser patch
     $obPre = Get-ManifestField 'OpenBrowser.json' 'pre_install'
     $fixture = @'
