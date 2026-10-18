@@ -1,12 +1,12 @@
 {
-  "version": "1.0.24",
+  "version": "1.0.25",
   "description": "OpenBrowser：本地指纹浏览器管理器 — 多环境隔离（独立 Chromium 配置文件）、代理 / 指纹 / 扩展管理、批量管理、窗口同步、本地 RPA、Local API + MCP（127.0.0.1:50325），内置 Wayfern 内核开箱即用。",
   "homepage": "https://github.com/sheying2013/OpenBrowser",
   "license": "MIT",
   "architecture": {
     "64bit": {
-      "url": "https://github.com/sheying2013/OpenBrowser/releases/download/v1.0.24/OpenBrowser-Windows-x86_64-with-kernel.zip",
-      "hash": "6ecc4c12dc04f880f7355bcb7a8a59247fcdb4afab958427a0ce6839dde39298"
+      "url": "https://github.com/sheying2013/OpenBrowser/releases/download/v1.0.25/OpenBrowser-Windows-x86_64-with-kernel.zip",
+      "hash": "e14f2bd793e588339a347bf1f8d66ee7eb240c09c402ac2d83c30ab337dc62fb"
     }
   },
   "persist": "UserData",
