@@ -64,8 +64,10 @@ function Invoke-Hook {
     $sb = [scriptblock]::Create($Text)
     $threw = $false
     $err = ''
-    try { & $sb | Out-Null } catch { $threw = $true; $err = [string]$_.Exception.Message }
-    return @{ Threw = $threw; Error = $err }
+    $out = ''
+    # 6>&1 captures Write-Host (information stream) so tests can assert on messages
+    try { $out = (& $sb 6>&1 | Out-String) } catch { $threw = $true; $err = [string]$_.Exception.Message }
+    return @{ Threw = $threw; Error = $err; Out = $out }
 }
 function Get-ManifestField([string]$manifestFile, [string]$field) {
     $path = Join-Path $RepoRoot ('bucket\' + $manifestFile)
@@ -424,6 +426,8 @@ try {
     Check ($reg.DenyCount -ge 4) "denies applied (count=$($reg.DenyCount))"
     $r = Invoke-Hook -Text $tyPre -Dir $dir13 -OriginalDir $orig13 -PersistDir $pers13
     Check (-not $r.Threw) "pre no exception ($($r.Error))"
+    # the summary must count what was really removed (RemoveAccessRuleSpecific returns void)
+    Check ($r.Out -match 'registry revert finished \(4 recorded rule\(s\) removed\)') "revert count reported ($($r.Out -replace '\s+', ' '))"
     $reg = Get-TestRegInfo
     Check ($null -ne $reg) 'key kept (pre-existed)'
     if ($reg) { Check-Eq $reg.DenyCount 0 'denies removed' }
