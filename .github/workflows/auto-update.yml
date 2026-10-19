@@ -2,6 +2,7 @@
 # - 每天 06:00 UTC（北京时间 14:00）检查一次；也可在 Actions 页手动触发
 # - 上游发新版 => 校验通过后创建/更新一个更新 PR（bot/update-manifests），不再直推 main
 # - 任何包检查失败：本次不产生任何提交，workflow 失败并输出逐包结果
+# - 失败（含推送 / 建 PR 失败、job 超时被取消）都会在末尾汇总成一个 issue
 # - PR 由人工审查合并（不自动合并）
 name: auto-update
 
@@ -23,9 +24,17 @@ concurrency:
 jobs:
   update:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # 4 个包串行处理；单包最坏情况 = 元数据 30s + 下载 15min。上限必须大于这个组合，
+    # 否则超时会被平台"取消"（cancelled）而不是 failure——那正是最容易漏通知的路径。
+    timeout-minutes: 70
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # 必须和下面 gh 用同一个令牌。checkout 默认把自己的 GITHUB_TOKEN 写进 git
+          # 配置，于是 git push 走的是 bot 身份；而由 GITHUB_TOKEN 触发的事件不会生成
+          # 新的工作流运行——PR 已存在时第二次更新分支就不会再触发 validate，必需检查
+          # 永远等不到结果。配上 PAT 后推送与建 PR 是同一身份。
+          token: ${{ secrets.AUTO_UPDATE_TOKEN || github.token }}
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24'
@@ -35,30 +44,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
-          node .github/scripts/update.js 2>&1 | tee /tmp/update.log
-
-      - name: Report the failure as an issue
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TITLE="auto-update: manual review required"
-          {
-            echo "The manifest check failed at $(date -u '+%Y-%m-%d %H:%M UTC')."
-            echo ""
-            echo '```'
-            tail -n 40 /tmp/update.log 2>/dev/null || true
-            echo '```'
-            echo ""
-            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
-          } > /tmp/issue.md
-          NUM=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
-          if [ -n "$NUM" ]; then
-            gh issue comment "$NUM" --repo "$GITHUB_REPOSITORY" --body-file /tmp/issue.md
-            echo "Commented on existing issue #$NUM."
-          else
-            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file /tmp/issue.md
-          fi
+          echo "check" > "$RUNNER_TEMP/stage"
+          node .github/scripts/update.js 2>&1 | tee "$RUNNER_TEMP/update.log"
 
       - name: Create or update the update PR
         id: pr
@@ -83,10 +70,13 @@ jobs:
           git add bucket/
           git diff --cached --stat
           git commit -m "auto: update manifests ($(date -u +%Y-%m-%d))"
+
+          echo "push" > "$RUNNER_TEMP/stage"
           git push -f origin "HEAD:refs/heads/$BRANCH"
 
           # 只看 OPEN 状态：`gh pr view` 对已关闭的同名 PR 也会命中，会让后续更新
           # 永远不再开新 PR（只默默改分支）。
+          echo "pr" > "$RUNNER_TEMP/stage"
           OPEN_PR=$(gh pr list --repo "$GITHUB_REPOSITORY" --head "$BRANCH" --state open --json number --jq '.[0].number // empty')
           if [ -n "$OPEN_PR" ]; then
             echo "Open PR #$OPEN_PR already exists for '$BRANCH'; branch updated in place."
@@ -96,5 +86,48 @@ jobs:
               --body "Automated manifest update produced by the auto-update workflow.
 
           - Only files under \`bucket/\` are included.
-          - Run the validation workflow, review upstream release notes, then merge manually."
+          - The validation workflow runs on this PR: the branch is pushed with the same token
+            that opens the PR, so the \`synchronize\` event is not suppressed.
+          - Review upstream release notes, then merge manually."
+          fi
+          echo "done" > "$RUNNER_TEMP/stage"
+
+      # 放在最后：检查 / 推送 / 建 PR 任一阶段失败都能被它捕获。原来它排在推送之前，
+      # 于是"检查通过但推送或建 PR 失败"这条路径完全没有通知。
+      - name: Report the failure as an issue
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          STAGE=unknown
+          if [ -f "$RUNNER_TEMP/stage" ]; then STAGE=$(cat "$RUNNER_TEMP/stage"); fi
+          case "$STAGE" in
+            check) STAGE_LABEL="manifest check (update.js)";;
+            push)  STAGE_LABEL="git push of bot/update-manifests";;
+            pr)    STAGE_LABEL="pull request creation/update";;
+            done)  STAGE_LABEL="after the work finished (late cancellation)";;
+            *)     STAGE_LABEL="unknown (the job stopped before any step marked it)";;
+          esac
+          TITLE="auto-update: manual review required"
+          {
+            echo "The auto-update workflow did not finish successfully."
+            echo ""
+            echo "- Status: \`$JOB_STATUS\`"
+            echo "- Failed stage: **$STAGE_LABEL** (\`$STAGE\`)"
+            echo "- Trigger: \`$GITHUB_EVENT_NAME\`"
+            echo "- Time: $(date -u '+%Y-%m-%d %H:%M UTC')"
+            echo ""
+            echo '```'
+            tail -n 40 "$RUNNER_TEMP/update.log" 2>/dev/null || echo "(no log captured)"
+            echo '```'
+            echo ""
+            echo "Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          } > "$RUNNER_TEMP/issue.md"
+          NUM=$(gh issue list --repo "$GITHUB_REPOSITORY" --state open --search "$TITLE in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$NUM" ]; then
+            gh issue comment "$NUM" --repo "$GITHUB_REPOSITORY" --body-file "$RUNNER_TEMP/issue.md"
+            echo "Commented on existing issue #$NUM."
+          else
+            gh issue create --repo "$GITHUB_REPOSITORY" --title "$TITLE" --body-file "$RUNNER_TEMP/issue.md"
           fi

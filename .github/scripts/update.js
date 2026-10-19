@@ -105,14 +105,23 @@ function remainingMs(deadline, what) {
   return left;
 }
 
-async function withRetry(desc, fn) {
+async function withRetry(desc, fn, opts = {}) {
+  const deadline = opts.deadline || 0;
   for (let attempt = 0; ; attempt++) {
     try {
       return await fn();
     } catch (e) {
       if (!isRetryable(e) || attempt >= RETRY_LIMIT) throw e;
+      const wait = RETRY_DELAY_MS * (attempt + 1);
+      if (deadline) {
+        // 预算已经用完就别再睡：等待时间也算在总预算里，否则"30 秒预算"会被
+        // 两次退避拖到 33 秒，而调用方以为它已经有硬截止。
+        const left = deadline - Date.now();
+        if (left <= 0) throw e;
+        if (wait > left) throw e;
+      }
       console.error(`  [retry ${attempt + 1}/${RETRY_LIMIT}] ${desc}: ${e.message}`);
-      await sleep(RETRY_DELAY_MS * (attempt + 1));
+      await sleep(wait);
     }
   }
 }
@@ -169,31 +178,54 @@ function requestOnce(url, opts = {}) {
 
   return new Promise((resolve, reject) => {
     const headers = { 'User-Agent': UA, ...(opts.headers || {}) };
+    // 墙钟截止：req.setTimeout() 只是 socket 空闲超时，服务端逐字节滴灌响应头时
+    // 计时器会被不断重置，预算可以被拖到任意长。这里额外挂一个真正的墙钟计时器，
+    // 覆盖 DNS/TCP 连接等待、重定向每一跳与响应头。**收到响应头立刻清除**：正文阶段
+    // 有自己的总时限与空闲计时器（见 fetchBuffer / downloadToFile），这里继续跑会
+    // 把正常的长时间下载误杀。
+    let hardTimer = null;
+    const clearHardTimer = () => {
+      if (hardTimer) {
+        clearTimeout(hardTimer);
+        hardTimer = null;
+      }
+    };
+    let settled = false;
+    const finish = (err) => {
+      if (settled) return;
+      settled = true;
+      clearHardTimer();
+      reject(err);
+    };
     const req = transportFor().get(u, { headers }, (res) => {
+      clearHardTimer();
       const status = res.statusCode;
       if (status >= 300 && status < 400) {
         res.resume();
-        if (!res.headers.location) return reject(policyError(`redirect (${status}) without location header for ${url}`));
-        if (hop >= MAX_REDIRECTS) return reject(policyError(`too many redirects (> ${MAX_REDIRECTS}) for ${url}`));
+        if (!res.headers.location) return finish(policyError(`redirect (${status}) without location header for ${url}`));
+        if (hop >= MAX_REDIRECTS) return finish(policyError(`too many redirects (> ${MAX_REDIRECTS}) for ${url}`));
         let next;
         try {
           next = new URL(res.headers.location, u);
         } catch (e) {
-          return reject(policyError(`bad redirect location "${res.headers.location}" for ${url}`));
+          return finish(policyError(`bad redirect location "${res.headers.location}" for ${url}`));
         }
         const nextHeaders = next.host === u.host ? opts.headers : stripAuth(opts.headers);
+        settled = true;
         return resolve(requestOnce(next.href, { ...opts, headers: nextHeaders, redirects: hop + 1 }));
       }
       if (status !== 200) {
         res.resume();
-        return reject(statusError(status, url));
+        return finish(statusError(status, url));
       }
+      settled = true;
       resolve({ res, finalUrl: u.href });
     });
     req.on('error', (e) => {
       if (e && !e.policy && !e.retryable) markNet(e);
-      reject(e);
+      finish(e);
     });
+    req.on('close', clearHardTimer);
     if (opts.headerTimeoutMs) {
       const budget = deadline
         ? Math.max(1, Math.min(opts.headerTimeoutMs, deadline - Date.now()))
@@ -201,6 +233,13 @@ function requestOnce(url, opts = {}) {
       req.setTimeout(budget, () =>
         req.destroy(timeoutError(`connection/header timeout after ${budget}ms${deadline ? ' (shared total budget)' : ''} for ${url}`))
       );
+    }
+    if (deadline) {
+      const left = deadline - Date.now();
+      hardTimer = setTimeout(() => {
+        hardTimer = null;
+        req.destroy(timeoutError(`wall-clock deadline exceeded before headers (${Math.max(left, 0)}ms left) for ${url}`));
+      }, Math.max(1, left));
     }
   });
 }
@@ -249,7 +288,7 @@ async function fetchBuffer(url, opts = {}) {
     } finally {
       clearTimeout(totalTimer);
     }
-  });
+  }, { deadline });
 }
 
 /** 下载到文件并流式计算 sha256；校验非空与 Content-Length。 */
@@ -319,7 +358,7 @@ async function downloadToFile(url, destPath, opts = {}) {
       throw markNet(new Error(`content-length mismatch for ${finalUrl}: expected ${contentLength}, got ${bytes}`));
     }
     return { sha256: hash.digest('hex'), bytes, finalUrl };
-  });
+  }, { deadline });
 }
 
 // ---------------------------------------------------------------- 校验工具
