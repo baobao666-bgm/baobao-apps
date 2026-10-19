@@ -88,9 +88,21 @@ function New-BaobaoJunction {
 }
 function Remove-BaobaoJunctionOnly {
     param([string]$Link)
-    attrib -R /L $Link 2>$null | Out-Null
-    try { [System.IO.Directory]::Delete($Link, $false) } catch {}
-    if (Test-Path -LiteralPath $Link) { cmd /c rd "$Link" 2>$null | Out-Null }
+    # Native tools report "in use / access denied" on stderr, and with
+    # $ErrorActionPreference = 'Stop' PowerShell turns the first stderr line from a
+    # native command into a *terminating* error. That used to abort the hook on the
+    # very first attempt, so the 3-attempt retry in Remove-BaobaoJunctionWithRetry
+    # never ran and the user got cmd's raw message instead of our guidance.
+    # Localise the preference around the native calls.
+    $prevEap = $ErrorActionPreference
+    try {
+        $ErrorActionPreference = 'Continue'
+        attrib -R /L $Link 2>$null | Out-Null
+        try { [System.IO.Directory]::Delete($Link, $false) } catch {}
+        if (Test-Path -LiteralPath $Link) { cmd /c rd "$Link" 2>$null | Out-Null }
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
     return (-not (Test-Path -LiteralPath $Link))
 }
 function Remove-BaobaoJunctionWithRetry {

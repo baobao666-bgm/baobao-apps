@@ -165,6 +165,26 @@ function Reset-Path([string]$path) {
     # make sure the path is completely absent before a case sets up its own state
     if (Test-Path -LiteralPath $path) { Remove-JunctionAt $path }
 }
+# Hold a directory / reparse point open *without* FILE_SHARE_DELETE, so deleting it
+# fails the way a running app makes it fail. Add-Type is fine here: the fixture runs
+# as a normal user in CI, and nothing is compiled into the repo.
+if (-not ('BaobaoTest.Io' -as [type])) {
+    Add-Type -Namespace BaobaoTest -Name Io -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sa, uint disp, uint flags, IntPtr tmpl);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool CloseHandle(IntPtr h);
+'@
+}
+function Lock-Path([string]$path) {
+    # GENERIC_READ, share=READ|WRITE (no DELETE), OPEN_EXISTING,
+    # FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT
+    return [BaobaoTest.Io]::CreateFileW($path, [uint32]2147483648, [uint32]3, [IntPtr]::Zero,
+        [uint32]3, [uint32]([uint32]0x02000000 -bor [uint32]0x00200000), [IntPtr]::Zero)
+}
+function Unlock-Path([IntPtr]$h) {
+    if ($h -and ($h.ToInt64() -ne -1)) { $null = [BaobaoTest.Io]::CloseHandle($h) }
+}
 function Get-ShortcutInfo([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return $null }
     $ws = New-Object -ComObject WScript.Shell
@@ -885,6 +905,37 @@ module.exports = { isTrustedSender };
     Check ($reg.DenyCount -ge 4) 'the registry fix is still applied (otherwise the build cannot start)'
     Clear-TestRegKey
     Reset-Path $jl36
+
+    # ---------------------------------------------------------------- C37
+    # N2 + retry behaviour: a junction that cannot be deleted must abort with our own
+    # guidance (not cmd's raw stderr), and the registry step must already be done.
+    Case 'typora pre_uninstall: a locked junction aborts after the registry step, then succeeds'
+    Clear-TestRegKey
+    $c37 = New-CaseDir
+    $dir37 = Join-Path $c37 'apps\typora0.11.18\current'
+    $orig37 = Join-Path $c37 'apps\typora0.11.18\0.11.18'
+    $pers37 = Join-Path $c37 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir37, $orig37, $pers37 -Force | Out-Null
+    $jl37 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl37
+    $r = Invoke-Hook -Text $tyPost -Dir $dir37 -OriginalDir $orig37 -PersistDir $pers37
+    Check (-not $r.Threw) "install ok ($($r.Error))"
+    New-TestFile (Join-Path $jl37 'keep.txt') 'persist data'
+    $h = Lock-Path $jl37
+    Check ($h.ToInt64() -ne -1) 'a handle without FILE_SHARE_DELETE was opened on the junction'
+    $r = Invoke-Hook -Text $tyPre -Dir $dir37 -OriginalDir $orig37 -PersistDir $pers37
+    Check $r.Threw 'uninstall aborted while the junction is locked'
+    Check ($r.Error -match 'could not remove the junction') "our guidance surfaced instead of raw stderr ($($r.Error))"
+    Check ($r.Error -match 'after 3 attempts') 'the retry loop actually ran three times'
+    Check (Test-Path -LiteralPath $jl37) 'junction left in place'
+    Check ($null -eq (Get-TestRegInfo)) 'registry step already finished before the junction step'
+    Check (Test-Path (Join-Path $pers37 'TyporaData\keep.txt')) 'persist data untouched'
+    Unlock-Path $h
+    Start-Sleep -Milliseconds 500
+    $r = Invoke-Hook -Text $tyPre -Dir $dir37 -OriginalDir $orig37 -PersistDir $pers37
+    Check (-not $r.Threw) "retry succeeds once the handle is gone ($($r.Error))"
+    Check (-not (Test-Path -LiteralPath $jl37)) 'junction removed on retry'
+    Clear-TestRegKey
 }
 finally {
     $env:APPDATA = $oldAppData
