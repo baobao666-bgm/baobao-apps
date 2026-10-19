@@ -936,6 +936,31 @@ module.exports = { isTrustedSender };
     Check (-not $r.Threw) "retry succeeds once the handle is gone ($($r.Error))"
     Check (-not (Test-Path -LiteralPath $jl37)) 'junction removed on retry'
     Clear-TestRegKey
+
+    # ---------------------------------------------------------------- C38
+    # "The key is gone" must be told apart from "the key cannot be opened": the first
+    # one means there is nothing left to revert, so the uninstall may finish.
+    Case 'typora pre_uninstall: a key that no longer exists is not treated as a failure'
+    Clear-TestRegKey
+    $c38 = New-CaseDir
+    $dir38 = Join-Path $c38 'apps\typora0.11.18\current'
+    $orig38 = Join-Path $c38 'apps\typora0.11.18\0.11.18'
+    $pers38 = Join-Path $c38 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir38, $orig38, $pers38 -Force | Out-Null
+    $jl38 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl38
+    $r = Invoke-Hook -Text $tyPost -Dir $dir38 -OriginalDir $orig38 -PersistDir $pers38
+    Check (-not $r.Threw) "install ok ($($r.Error))"
+    $state38 = Join-Path $pers38 '.registry-state.json'
+    Check (Test-Path -LiteralPath $state38) 'record written'
+    Clear-TestRegKey   # removes our rules and deletes the key behind the hook's back
+    Check ($null -eq (Get-TestRegInfo)) 'key is gone before the uninstall'
+    $r = Invoke-Hook -Text $tyPre -Dir $dir38 -OriginalDir $orig38 -PersistDir $pers38
+    Check (-not $r.Threw) "uninstall completes when the key is already gone ($($r.Error))"
+    Check ($r.Out -match 'no longer exists') 'log says the key disappeared'
+    Check (-not (Test-Path -LiteralPath $state38)) 'record cleared (nothing left to retry)'
+    Check (-not (Test-Path -LiteralPath $jl38)) 'junction removed'
+    Clear-TestRegKey
 }
 finally {
     $env:APPDATA = $oldAppData
