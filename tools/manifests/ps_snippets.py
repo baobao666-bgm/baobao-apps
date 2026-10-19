@@ -645,7 +645,8 @@ if ($foreignLink) {
         ' expiry popup) is applied, otherwise this build would not start.')
     if ($env:BAOBAO_STRICT_FOREIGN_LINK -eq '1') {
         throw ("Typora: $jlink is a junction this package does not manage." +
-            ' BAOBAO_STRICT_FOREIGN_LINK=1 asks the install to stop here; nothing was changed.')
+            ' BAOBAO_STRICT_FOREIGN_LINK=1 asks the install to stop here; no links, files or registry' +
+            ' entries were changed (a running Typora may have been asked to close).')
     }
 }
 if ($needJunction) {
