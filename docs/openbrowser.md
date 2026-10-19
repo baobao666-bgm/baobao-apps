@@ -17,6 +17,24 @@ scoop dir fingerprint-chromium
 2. 点「选择自定义内核」→ 选择上一步目录下的 `chrome.exe`
 3. 勾选「优先使用独立内核」，取消「允许手动回退到本机浏览器」
 
+## 快捷方式
+
+上游发布物是**绿色便携包**（ZIP，解压后只有 `START.cmd`），本身不带安装程序，所以原生情况下桌面、开始菜单都不会有任何快捷方式——官方用法就是双击 `START.cmd`。
+
+本包安装时会补上两个：
+
+| 位置 | 名称 | 说明 |
+|---|---|---|
+| 桌面 | `OpenBrowser.lnk` | 指向 `apps\OpenBrowser\current\runtime\OpenBrowser.exe`，工作目录为 `current`，图标取包内 `runtime\resources\app\assets\logo.ico` |
+| 开始菜单 → Scoop Apps | `OpenBrowser.lnk` | Scoop 按清单 `shortcuts` 字段创建，指向同一个 exe |
+
+几点说明：
+
+- 目标刻意走 `current`（联接）而不是版本号目录，`scoop update` 换版本后快捷方式不会失效。
+- 名字是纯 ASCII，不受系统 ANSI 代码页影响（与「星愿浏览器」那个中文名快捷方式的平台限制不同）。
+- 创建失败只告警、不影响安装完成（例如被组策略禁用 WScript.Shell 的精简系统）。
+- 卸载时只删除**指向本包目录**的桌面快捷方式；你把目标改成别的程序、或自己另建的 `OpenBrowser.lnk` 不会被删。
+
 ## 代理建议
 
 建议每个环境绑定**独立住宅代理**，并保证 IP 地理位置、时区、语言三者与指纹一致。管理器内置代理管理 / 代理检测页面。

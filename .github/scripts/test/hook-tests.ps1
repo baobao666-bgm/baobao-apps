@@ -163,13 +163,33 @@ function Reset-Path([string]$path) {
     # make sure the path is completely absent before a case sets up its own state
     if (Test-Path -LiteralPath $path) { Remove-JunctionAt $path }
 }
+function Get-ShortcutInfo([string]$path) {
+    if (-not (Test-Path -LiteralPath $path)) { return $null }
+    $ws = New-Object -ComObject WScript.Shell
+    $sc = $ws.CreateShortcut($path)
+    return @{
+        TargetPath       = [string]$sc.TargetPath
+        WorkingDirectory = [string]$sc.WorkingDirectory
+        IconLocation     = [string]$sc.IconLocation
+    }
+}
+function New-TestShortcut([string]$path, [string]$target, [string]$icon) {
+    $ws = New-Object -ComObject WScript.Shell
+    $sc = $ws.CreateShortcut($path)
+    $sc.TargetPath = $target
+    if ($icon) { $sc.IconLocation = $icon }
+    $sc.Save()
+}
 
 $oldAppData = $env:APPDATA
 $oldLocalAppData = $env:LOCALAPPDATA
+$oldDesktopOverride = $env:BAOBAO_DESKTOP_DIR
 try {
     $env:APPDATA = Join-Path $sandboxRoot 'Roaming'
     $env:LOCALAPPDATA = Join-Path $sandboxRoot 'Local'
-    New-Item -ItemType Directory -Path $env:APPDATA, $env:LOCALAPPDATA -Force | Out-Null
+    $testDesktop = Join-Path $sandboxRoot 'Desktop'
+    New-Item -ItemType Directory -Path $env:APPDATA, $env:LOCALAPPDATA, $testDesktop -Force | Out-Null
+    $env:BAOBAO_DESKTOP_DIR = $testDesktop
     Clear-TestRegKey
 
     $obPost = Get-ManifestField 'OpenBrowser.json' 'post_install'
@@ -639,10 +659,64 @@ module.exports = { isTrustedSender };
     Check ($r.Error -match 'expected-url statement not found') "clear error ($($r.Error))"
     $untouched = [System.IO.File]::ReadAllText($main17, $utf8)
     Check-Eq $untouched $broken 'file untouched'
+
+    # ------------------------------------------------- desktop shortcut cases
+    $obUninstall = Get-ManifestField 'OpenBrowser.json' 'pre_uninstall'
+    $link = Join-Path $testDesktop 'OpenBrowser.lnk'
+
+    Case 'OpenBrowser post_install: desktop shortcut points at current\runtime\OpenBrowser.exe'
+    $c30 = New-CaseDir
+    $dir30 = Join-Path $c30 'apps\OpenBrowser\current'
+    $orig30 = Join-Path $c30 'apps\OpenBrowser\1.0.25'
+    $pers30 = Join-Path $c30 'persist\OpenBrowser'
+    New-Item -ItemType Directory -Path $dir30, $orig30, $pers30 -Force | Out-Null
+    $ico30 = Join-Path $dir30 'runtime\resources\app\assets\logo.ico'
+    New-TestFile $ico30 'ICON'
+    New-TestFile (Join-Path $dir30 'runtime\OpenBrowser.exe') 'EXE'
+    Remove-Item -LiteralPath $link -Force -ErrorAction SilentlyContinue
+    $r = Invoke-Hook -Text $obPost -Dir $dir30 -OriginalDir $orig30 -PersistDir $pers30
+    Check (-not $r.Threw) "no exception ($($r.Error))"
+    $sc30 = Get-ShortcutInfo $link
+    Check ($null -ne $sc30) 'shortcut created'
+    if ($sc30) {
+        Check-Eq (Norm $sc30.TargetPath) (Norm (Join-Path $dir30 'runtime\OpenBrowser.exe')) 'target is the exe under current'
+        Check-Eq (Norm $sc30.WorkingDirectory) (Norm $dir30) 'working dir is the current folder'
+        Check ($sc30.IconLocation.StartsWith((Join-Path $dir30 'runtime\resources\app\assets\logo.ico'))) "icon is logo.ico ($($sc30.IconLocation))"
+        Check ($sc30.TargetPath -notmatch '\\\d+\.\d+\.\d+\\') 'target does not pin a version folder (survives updates)'
+    }
+
+    Case 'OpenBrowser post_install: second run keeps a single shortcut'
+    $r = Invoke-Hook -Text $obPost -Dir $dir30 -OriginalDir $orig30 -PersistDir $pers30
+    Check (-not $r.Threw) "no exception ($($r.Error))"
+    Check (Test-Path -LiteralPath $link) 'shortcut still present'
+    Check-Eq (@(Get-ChildItem $testDesktop -Filter '*.lnk').Count) '1' 'exactly one shortcut on the desktop'
+
+    Case 'OpenBrowser post_install: a foreign OpenBrowser.lnk is left untouched'
+    $c31 = New-CaseDir
+    $dir31 = Join-Path $c31 'apps\OpenBrowser\current'
+    $orig31 = Join-Path $c31 'apps\OpenBrowser\1.0.25'
+    $pers31 = Join-Path $c31 'persist\OpenBrowser'
+    New-Item -ItemType Directory -Path $dir31, $orig31, $pers31 -Force | Out-Null
+    $foreign = Join-Path $env:SystemRoot 'notepad.exe'
+    New-TestShortcut $link $foreign ''
+    $r = Invoke-Hook -Text $obPost -Dir $dir31 -OriginalDir $orig31 -PersistDir $pers31
+    Check (-not $r.Threw) "no exception ($($r.Error))"
+    $sc31 = Get-ShortcutInfo $link
+    Check-Eq (Norm $sc31.TargetPath) (Norm $foreign) 'foreign target untouched'
+
+    Case 'OpenBrowser pre_uninstall: removes only our own shortcut'
+    $r = Invoke-Hook -Text $obUninstall -Dir $dir30 -OriginalDir $orig30 -PersistDir $pers30
+    Check (-not $r.Threw) "no exception ($($r.Error))"
+    Check-Eq (Norm (Get-ShortcutInfo $link).TargetPath) (Norm $foreign) 'foreign shortcut survived'
+    New-TestShortcut $link (Join-Path $dir30 'runtime\OpenBrowser.exe') ''
+    $r = Invoke-Hook -Text $obUninstall -Dir $dir30 -OriginalDir $orig30 -PersistDir $pers30
+    Check (-not $r.Threw) "no exception ($($r.Error))"
+    Check (-not (Test-Path -LiteralPath $link)) 'our shortcut removed'
 }
 finally {
     $env:APPDATA = $oldAppData
     $env:LOCALAPPDATA = $oldLocalAppData
+    $env:BAOBAO_DESKTOP_DIR = $oldDesktopOverride
     Clear-TestRegKey
     Remove-SandboxTree $sandboxRoot
 }
