@@ -1,6 +1,7 @@
 # Read-only validation for PRs and main:
 #  - Node logic tests for the hardened update script
 #  - Manifest JSON + Scoop schema validation (vendored schema under .github/schema/)
+#  - bucket/*.json must be exactly what tools/manifests generates (no hand edits)
 #  - PowerShell AST syntax check for every embedded hook script
 #  - Windows end-to-end lifecycle test (install / force-update / junction / persist / uninstall)
 name: validate
@@ -31,6 +32,8 @@ jobs:
         run: node --check .github/scripts/update.js
       - name: Node logic tests (update.js)
         run: node --test ".github/scripts/test/*.test.js"
+      - name: Manifests must match the generator (tools/manifests)
+        run: python3 tools/manifests/make_manifests.py --check
       - name: Manifest JSON + Scoop schema validation
         run: |
           python3 -m pip install --quiet jsonschema

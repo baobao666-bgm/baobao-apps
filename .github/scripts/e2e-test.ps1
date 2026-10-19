@@ -149,6 +149,7 @@ Run-Scoop @('uninstall', 'typora0.11.18') | Out-Null
 Assert (-not (Test-Path -LiteralPath $typoraLink)) 'junction removed on uninstall'
 Assert (Test-Path (Join-Path $typoraTarget 'marker.txt')) 'persist data kept on normal uninstall'
 Assert ($null -eq (Get-RegDenyInfo 'SOFTWARE\Typora')) 'registry key removed on uninstall (was created by the package)'
+Assert (-not (Test-Path (Join-Path $ScoopDir 'persist\typora0.11.18\.registry-state.json'))) 'registry state file cleared after a verified revert'
 
 Step 'typora0.11.18: reinstall reuses persist data, then -p purges'
 Run-Scoop @('install', 'baobao-test/typora0.11.18') | Out-Null
@@ -186,6 +187,13 @@ Run-Scoop @('uninstall', 'OpenBrowser') | Out-Null
 Assert (-not (Test-Path -LiteralPath $obLink)) 'junction removed on uninstall'
 Assert (Test-Path (Join-Path $obTarget 'marker.txt')) 'persist data kept on normal uninstall'
 
+Step 'OpenBrowser: uninstall -p purges persist data'
+Run-Scoop @('install', 'baobao-test/OpenBrowser') | Out-Null
+Test-Junction $obLink $obTarget 'OpenBrowser before -p'
+Run-Scoop @('uninstall', '-p', 'OpenBrowser') | Out-Null
+Assert (-not (Test-Path -LiteralPath $obLink)) 'junction removed with -p'
+Assert (-not (Test-Path (Join-Path $ScoopDir 'persist\OpenBrowser'))) 'persist purged with -p'
+
 # ---------------------------------------------------------------- 3. Twinkstar
 Step 'Twinkstar: fresh install'
 Run-Scoop @('install', 'baobao-test/Twinkstar') | Out-Null
@@ -204,6 +212,13 @@ Run-Scoop @('uninstall', 'Twinkstar') | Out-Null
 Assert (-not (Test-Path -LiteralPath $tsLink)) 'junction removed on uninstall'
 Assert (Test-Path (Join-Path $tsTarget 'marker.txt')) 'persist data kept on normal uninstall'
 
+Step 'Twinkstar: uninstall -p purges persist data'
+Run-Scoop @('install', 'baobao-test/Twinkstar') | Out-Null
+Test-Junction $tsLink $tsTarget 'Twinkstar before -p'
+Run-Scoop @('uninstall', '-p', 'Twinkstar') | Out-Null
+Assert (-not (Test-Path -LiteralPath $tsLink)) 'junction removed with -p'
+Assert (-not (Test-Path (Join-Path $ScoopDir 'persist\Twinkstar'))) 'persist purged with -p'
+
 # ---------------------------------------------------------------- 4. fingerprint-chromium
 Step 'fingerprint-chromium: fresh install'
 Run-Scoop @('install', 'baobao-test/fingerprint-chromium') | Out-Null
@@ -221,6 +236,13 @@ Step 'fingerprint-chromium: normal uninstall keeps persist data'
 Run-Scoop @('uninstall', 'fingerprint-chromium') | Out-Null
 Assert (-not (Test-Path -LiteralPath $fpcLink)) 'junction removed on uninstall'
 Assert (Test-Path (Join-Path $fpcTarget 'marker.txt')) 'persist data kept on normal uninstall'
+
+Step 'fingerprint-chromium: uninstall -p purges persist data'
+Run-Scoop @('install', 'baobao-test/fingerprint-chromium') | Out-Null
+Test-Junction $fpcLink $fpcTarget 'fingerprint-chromium before -p'
+Run-Scoop @('uninstall', '-p', 'fingerprint-chromium') | Out-Null
+Assert (-not (Test-Path -LiteralPath $fpcLink)) 'junction removed with -p'
+Assert (-not (Test-Path (Join-Path $ScoopDir 'persist\fingerprint-chromium'))) 'persist purged with -p'
 
 # ---------------------------------------------------------------- summary
 Step 'Summary'

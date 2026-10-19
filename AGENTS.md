@@ -16,6 +16,18 @@
 - 禁止自动清空数据；禁止合并两处非空数据（必须停止并报告两个位置）；禁止删除/接管来源不明的联接；不得递归删除联接目标（已实测：PowerShell 5.1 的 `Remove-Item -Recurse` 不跟随联接，但代码仍不应依赖这一点去删别人的数据）。
 - 卸载时若本包的联接删不掉：重试后**中止卸载**并给出 `rd "<路径>"` 手工命令，不留下指向空路径的悬空入口。
 
+### 外来联接（该位置已被别的工具建成联接）
+
+| 情况 | 处理 |
+|---|---|
+| 联接指向本包 `persist` 或旧版本目录 | 正常修复/迁移，属本包管理范围 |
+| 联接指向**任何其他目标** | 不改指向、不迁移、不删除，**也不得写穿它**（不得往联接目标里写任何文件） |
+| 同上，且用户显式要求硬失败 | 环境变量 `BAOBAO_STRICT_FOREIGN_LINK=1` → 在任何修改之前中止安装 |
+
+- 通用三包（OpenBrowser / Twinkstar / fingerprint-chromium）遇到外来联接只提示并继续安装，因为它们没有"写穿"副作用；数据不会进入本包 persist，这一点必须写进 Notes 与 `docs/`。
+- `typora0.11.18` 是唯一带"写穿"风险的包（`profile.data` 位于 `%APPDATA%\Typora` 之下）：外来联接时**跳过 `profile.data` 修改**，只保留让它能启动的注册表修复——不要为了统一行为把这个注册表修复也删掉，删了软件就无法启动。
+- 任何"数据一定进入 persist""C 盘不保存实际数据"的表述都必须带外来联接的限定条件。
+
 ## 卸载与版本管理
 
 - 普通卸载：保留 persist 数据，仅移除联接。
@@ -32,6 +44,9 @@
 
 - 只允许**记录式**修改：安装时记录原状（键是否存在、原值、本包添加的 ACL 规则），卸载时精确撤销；已有键恢复原状态，本包新建的键在确认可删除时清理。
 - 不得以整键删除代替恢复；不得移除不属于本包的 Deny 等规则；不得增加其他注册表扫描。
+- 记录文件（`<persist>\.registry-state.json`）是"哪些规则属于本包"的**唯一依据**：记录损坏、schema 未知、或键打不开时**不猜、不重推**，保留文件并中止安装/卸载并给出人工处理命令。
+- 撤销必须回读核验（规则是否存在、值是否存在、值类型是否一致）。规则没撤干净要中止；`IDate` 这类值恢复失败则**如实报告并保留记录**、不中止——它通常是被他人 ACL 挡住，中止只会让卸载卡死。
+- 先撤销注册表、再删 `%APPDATA%` 联接：这样中止时应用仍是完整可用的状态，而不是"应用还在、数据入口没了"。
 
 ## 版本与自动更新（CI）
 
@@ -40,9 +55,10 @@
 - 更新脚本必须整批检查：**任一包失败则本次不写任何清单并以非零退出**；版本/URL/哈希均未变化时不重写文件。
 - 自动更新只创建/更新单个 PR（不直推 main）；`scoop update` 由人工审查合并。
 - `auto-update` 默认用 `GITHUB_TOKEN`：由它产生的 `pull_request` 事件不会启动工作流，bot PR 的必需检查因此不会上报，PR 会一直停在 `blocked`。**手动 `workflow_dispatch` 补跑没有用**——检查会显示通过，但分支保护不认（实测合并返回 "required status checks are expected"）。
-  - 推荐：在仓库 Secrets 里加 `AUTO_UPDATE_TOKEN`（细粒度 PAT，`contents: write` + `pull-requests: write`）。工作流会自动改用它创建 PR，PR 作者是真人，检查正常触发。
+  - 推荐：在仓库 Secrets 里加 `AUTO_UPDATE_TOKEN`（细粒度 PAT，`contents: write` + `pull-requests: write`）。工作流的 **checkout、`git push`、`gh pr create` 三处都改用它**：只给 `gh` 配 PAT 是不够的，`git push` 走 `GITHUB_TOKEN` 时，PR 分支的 `synchronize` 事件同样被抑制，第二次更新起 validate 不会再跑。
   - 没有 PAT 时：在 PR 页点一次 "Approve workflows to run"，让那条 `action_required` 的 run 执行。
-- 检查失败时工作流会创建/更新一个 issue（标题 `auto-update: manual review required`），不再只留一行 Actions 日志。
+- 失败通知放在**所有发布步骤之后**，并按阶段标记（check / push / pr）区分，且同时覆盖 `failure()` 与 `cancelled()`。
+- 单包下载预算 15 分钟 × 4 个包串行 < job 的 `timeout-minutes`：调小或调大任何一边都要重新核对这个不等式，否则超时表现为"取消"，最容易漏通知。
 - `typora0.11.18` 为固定版本，不参与自动更新——它是**唯一**适用专属版本使用限制的包。
 
 ## 文案与文档
@@ -57,12 +73,24 @@
 - Start Menu 快捷方式名含非 ASCII 字符（如「星愿浏览器」）时，Scoop 内部的 WScript.Shell 会按**系统 ANSI 代码页**做文件名转换：在非对应代码页的系统（如英文系统的 CI runner）上会保存失败并被跳过——stderr 出现一条非致命错误，**安装本身照常成功**；中文系统上正常创建。属平台限制，无需"修复"；CI 的 E2E 已按此预期放行。
 - Scoop 的 `scoop install` 在同版本重复执行时不会重装（提示改用 `scoop update`）；重跑安装钩子必须用 `scoop update -f`。
 
+## 清单脚本的唯一源文件
+
+`bucket/*.json` 里那几百行 PowerShell 是**生成产物**，源文件只有两个：
+
+- `tools/manifests/ps_snippets.py`（钩子脚本文本）
+- `tools/manifests/make_manifests.py`（拼装清单 + 架构字段 + Notes）
+
+改钩子脚本 = 改 `ps_snippets.py` → `python tools/manifests/make_manifests.py` → 提交两者。**不要直接手改 JSON**：下一次生成会静默覆盖，CI 也会因为对不上而失败（`--check`）。审阅时请指向 `tools/manifests/`，不要指向压缩成单行的清单文件。
+
 ## 验证要求
 
 提交前必须通过仓库 CI（`.github/workflows/validate.yml`）：
 
 1. `node --check` + `node --test .github/scripts/test/*.test.js`（update.js 逻辑）
-2. Scoop Schema 校验（`.github/schema/`，`validate_manifests.py`）
-3. 嵌入脚本的 PowerShell AST 语法检查（`check-manifests.ps1`）
-4. 钩子夹具测试（`hook-tests.ps1`：迁移/冲突/外来联接/幂等/注册表，全部在沙箱中执行）
-5. Windows 端到端生命周期测试（`e2e-test.ps1`：安装/强更/数据联接/卸载）
+2. `python tools/manifests/make_manifests.py --check`（清单必须等于生成器输出）
+3. Scoop Schema 校验（`.github/schema/`，`validate_manifests.py`）
+4. 嵌入脚本的 PowerShell AST 语法检查（`check-manifests.ps1`）
+5. 钩子夹具测试（`hook-tests.ps1`：迁移/冲突/外来联接/幂等/注册表，全部在沙箱中执行）
+6. Windows 端到端生命周期测试（`e2e-test.ps1`：安装/强更/数据联接/卸载）
+
+本地在 Windows 上跑 `hook-tests.ps1` / `check-manifests.ps1` 时，请显式传路径参数（`-RepoRoot` / `-BucketDir`）：用 `powershell -File` 从某些宿主调用时 `$PSScriptRoot` 为空，参数默认值会先于脚本执行而报错。

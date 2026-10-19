@@ -15,6 +15,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const net = require('node:net');
 
 const upd = require('../update.js');
 
@@ -56,6 +57,30 @@ async function withServer(handler, fn) {
     await new Promise((resolve) => srv.close(resolve));
   }
 }
+
+/** 起一个裸 TCP 服务，按字节滴灌响应，用来模拟"慢响应头"的上游。 */
+async function withRawServer(onRequest, fn) {
+  const sockets = new Set();
+  const srv = net.createServer((sock) => {
+    sockets.add(sock);
+    sock.on('close', () => sockets.delete(sock));
+    // 对端被墙钟截止强杀后，服务端后续 write 会得到 ECONNRESET/EPIPE：这是预期行为，
+    // 不能让它在测试进程里变成未捕获异常。
+    sock.on('error', () => {});
+    sock.once('data', () => onRequest(sock));
+  });
+  await new Promise((resolve) => srv.listen(0, '127.0.0.1', resolve));
+  const base = `http://127.0.0.1:${srv.address().port}`;
+  upd.__setTestTransport(http, { allowInsecure: true });
+  try {
+    return await fn(base);
+  } finally {
+    upd.__resetTestHooks();
+    for (const s of sockets) s.destroy();
+    await new Promise((resolve) => srv.close(resolve));
+  }
+}
+
 
 // ------------------------------------------------------------------ 版本比较
 test('cmpVersion：数字点分比较', () => {
@@ -356,6 +381,58 @@ test('downloadToFile：无数据超时（idle）', async () => {
       upd.downloadToFile(`${base}/idle.bin`, dest, { idleTimeoutMs: 150, totalTimeoutMs: 5000 }),
       /stalled|closed before download completed/
     );
+  });
+  fs.rmSync(dest, { force: true });
+});
+
+test('总截止时间：滴灌响应头也逃不掉墙钟截止（R5 回归）', async () => {
+  // 服务端每 25ms 发一个响应头字节：socket 一直"有活动"，req.setTimeout() 的
+  // 空闲计时器永远不会触发，只有真正的墙钟计时器能把它停下来。
+  await withRawServer((sock) => {
+    const raw = Buffer.from(
+      'HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: 2\r\nConnection: close\r\n\r\n{}'
+    );
+    sock.write(raw.subarray(0, 10));
+    let i = 10;
+    const timer = setInterval(() => {
+      if (i >= raw.length) {
+        clearInterval(timer);
+        return;
+      }
+      sock.write(raw.subarray(i, i + 1));
+      i += 1;
+    }, 25);
+    sock.on('close', () => clearInterval(timer));
+  }, async (base) => {
+    const budget = 250;
+    const started = Date.now();
+    await assert.rejects(upd.fetchBuffer(`${base}/drip`, { timeoutMs: budget }), /wall-clock|deadline|timeout/);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < budget * 3, `wall clock must bound the header phase (${elapsed}ms for a ${budget}ms budget)`);
+  });
+});
+
+test('墙钟截止不误杀正文：响应头到达后慢正文可以继续读', async () => {
+  // 响应头立刻返回，正文分 8 块慢速发送；总用时超过 headerTimeoutMs 但远小于
+  // totalTimeoutMs。若硬截止没有在收到响应头时清除，这里会失败。
+  const payload = Buffer.alloc(8 * 64, 0x41);
+  const dest = tmpFile('slow.bin');
+  await withServer((req, res) => {
+    res.writeHead(200, { 'Content-Length': payload.length });
+    let off = 0;
+    const timer = setInterval(() => {
+      if (off >= payload.length) {
+        clearInterval(timer);
+        res.end();
+        return;
+      }
+      res.write(payload.subarray(off, off + 64));
+      off += 64;
+    }, 60);
+    res.on('close', () => clearInterval(timer));
+  }, async (base) => {
+    const r = await upd.downloadToFile(`${base}/slow.bin`, dest, { idleTimeoutMs: 150, totalTimeoutMs: 10000 });
+    assert.equal(r.bytes, payload.length);
   });
   fs.rmSync(dest, { force: true });
 });

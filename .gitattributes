@@ -1,0 +1,9 @@
+# 清单是生成产物：行尾统一 LF，这样生成器写出的文件与工作区一致，
+# CI 的 make_manifests.py --check 也能逐字节比较（否则 Windows 的 autocrlf
+# 会让每个清单在 git status 里显示为已修改，而内容其实没变）。
+bucket/*.json text eol=lf
+
+# 脚本与工具源码同样按 LF 保存
+*.py text eol=lf
+*.js text eol=lf
+*.yml text eol=lf

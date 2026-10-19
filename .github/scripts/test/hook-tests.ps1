@@ -165,6 +165,26 @@ function Reset-Path([string]$path) {
     # make sure the path is completely absent before a case sets up its own state
     if (Test-Path -LiteralPath $path) { Remove-JunctionAt $path }
 }
+# Hold a directory / reparse point open *without* FILE_SHARE_DELETE, so deleting it
+# fails the way a running app makes it fail. Add-Type is fine here: the fixture runs
+# as a normal user in CI, and nothing is compiled into the repo.
+if (-not ('BaobaoTest.Io' -as [type])) {
+    Add-Type -Namespace BaobaoTest -Name Io -MemberDefinition @'
+[DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+public static extern IntPtr CreateFileW(string name, uint access, uint share, IntPtr sa, uint disp, uint flags, IntPtr tmpl);
+[DllImport("kernel32.dll", SetLastError = true)]
+public static extern bool CloseHandle(IntPtr h);
+'@
+}
+function Lock-Path([string]$path) {
+    # GENERIC_READ, share=READ|WRITE (no DELETE), OPEN_EXISTING,
+    # FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT
+    return [BaobaoTest.Io]::CreateFileW($path, [uint32]2147483648, [uint32]3, [IntPtr]::Zero,
+        [uint32]3, [uint32]([uint32]0x02000000 -bor [uint32]0x00200000), [IntPtr]::Zero)
+}
+function Unlock-Path([IntPtr]$h) {
+    if ($h -and ($h.ToInt64() -ne -1)) { $null = [BaobaoTest.Io]::CloseHandle($h) }
+}
 function Get-ShortcutInfo([string]$path) {
     if (-not (Test-Path -LiteralPath $path)) { return $null }
     $ws = New-Object -ComObject WScript.Shell
@@ -352,6 +372,9 @@ try {
     Check (-not (Test-Path -LiteralPath $jl9)) 'junction removed'
     Check (Test-Path (Join-Path $pers9 'TyporaData\keep.txt')) 'persist data kept'
     Check ($null -eq (Get-TestRegInfo)) 'registry key removed (it was created by the package)'
+    # The record may only disappear after a verified revert; when the package deletes
+    # its own key there is nothing left to retry, so the file has to go too.
+    Check (-not (Test-Path -LiteralPath (Join-Path $pers9 '.registry-state.json'))) 'state file cleared after the key was deleted'
 
     # ---------------------------------------------------------------- C10
     Case 'typora: legacy junction into the version dir is migrated to persist'
@@ -511,7 +534,7 @@ try {
     Clear-TestRegKey
 
     # ---------------------------------------------------------------- C20
-    Case 'typora: corrupt or missing state never triggers a guessed ACL cleanup'
+    Case 'typora: a corrupt state file aborts the uninstall instead of guessing'
     Clear-TestRegKey
     $null = New-Item -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Force
     $c20 = New-CaseDir
@@ -527,11 +550,13 @@ try {
     Check (Test-Path -LiteralPath $statePath20) 'state file exists before the damage'
     [System.IO.File]::WriteAllText($statePath20, '{not json', $utf8)
     $r = Invoke-Hook -Text $tyPre -Dir $dir20 -OriginalDir $orig20 -PersistDir $pers20
-    Check (-not $r.Threw) "pre no exception on corrupt state ($($r.Error))"
+    Check $r.Threw 'corrupt state aborts the uninstall'
+    Check ($r.Error -match 'unreadable or from an unknown schema') "error explains the state is unusable ($($r.Error))"
     $reg = Get-TestRegInfo
     Check ($reg.DenyCount -ge 4) "deny rules left in place on corrupt state (count=$($reg.DenyCount))"
     Check (Test-Path -LiteralPath $statePath20) 'corrupt state file kept for inspection'
     Check-Eq ([System.IO.File]::ReadAllText($statePath20, $utf8)) '{not json' 'corrupt state file not overwritten'
+    Check (Test-Path -LiteralPath $jl20) 'data junction left alone when the uninstall aborts'
     Remove-Item -LiteralPath $statePath20 -Force
     $r = Invoke-Hook -Text $tyPre -Dir $dir20 -OriginalDir $orig20 -PersistDir $pers20
     Check (-not $r.Threw) "pre no exception on missing state ($($r.Error))"
@@ -716,6 +741,226 @@ module.exports = { isTrustedSender };
     $r = Invoke-Hook -Text $obUninstall -Dir $dir30 -OriginalDir $orig30 -PersistDir $pers30
     Check (-not $r.Threw) "no exception ($($r.Error))"
     Check (-not (Test-Path -LiteralPath $link)) 'our shortcut removed'
+
+    # ---------------------------------------------------------------- C31
+    # R1: the key exists but cannot be opened for permission changes. There is no
+    # reliable way to make OpenSubKey fail without locking the test key itself, so
+    # the one call is stubbed to $null - the branch under test is unchanged.
+    Case 'typora pre_uninstall: an inaccessible registry key aborts and keeps the record'
+    Clear-TestRegKey
+    $null = New-Item -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Force
+    $c31 = New-CaseDir
+    $dir31 = Join-Path $c31 'apps\typora0.11.18\current'
+    $orig31 = Join-Path $c31 'apps\typora0.11.18\0.11.18'
+    $pers31 = Join-Path $c31 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir31, $orig31, $pers31 -Force | Out-Null
+    $jl31 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl31
+    $r = Invoke-Hook -Text $tyPost -Dir $dir31 -OriginalDir $orig31 -PersistDir $pers31
+    Check (-not $r.Threw) "post no exception ($($r.Error))"
+    $statePath31 = Join-Path $pers31 '.registry-state.json'
+    $tyPreNoKey = $tyPre.Replace('$key = Open-BaobaoAclKey $regPath', '$key = $null')
+    Check ($tyPreNoKey -ne $tyPre) 'stub applied to the ACL open call'
+    $r = Invoke-Hook -Text $tyPreNoKey -Dir $dir31 -OriginalDir $orig31 -PersistDir $pers31
+    Check $r.Threw 'uninstall aborted when the key cannot be opened'
+    Check ($r.Error -match 'cannot be opened for permission changes') "error says the key is inaccessible ($($r.Error))"
+    Check (Test-Path -LiteralPath $statePath31) 'state file kept (this was the R1 data-loss bug)'
+    $st31 = Get-HookState $pers31
+    if ($st31) { Check-Eq (@($st31.addedRules).Count) 4 'recorded rules not relabelled as pre-existing' }
+    Check (-not ($r.Out -match 'state file cleared')) 'log does not claim the record was cleared'
+    Check (Test-Path -LiteralPath $jl31) 'data junction left in place when the uninstall aborts'
+    Clear-TestRegKey
+
+    # ---------------------------------------------------------------- C32
+    # R1: the deny rules come out, but IDate cannot be written back. Aborting here
+    # would strand the install because of someone else's deny rule, so the hook
+    # finishes, says so plainly and keeps the record.
+    Case 'typora pre_uninstall: an unrestorable IDate is reported and the record kept'
+    Clear-TestRegKey
+    $null = New-Item -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Force
+    Set-ItemProperty -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Name 'IDate' -Value '01/01/2020'
+    $c32 = New-CaseDir
+    $dir32 = Join-Path $c32 'apps\typora0.11.18\current'
+    $orig32 = Join-Path $c32 'apps\typora0.11.18\0.11.18'
+    $pers32 = Join-Path $c32 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir32, $orig32, $pers32 -Force | Out-Null
+    $jl32 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl32
+    $r = Invoke-Hook -Text $tyPost -Dir $dir32 -OriginalDir $orig32 -PersistDir $pers32
+    Check (-not $r.Threw) "post no exception ($($r.Error))"
+    $statePath32 = Join-Path $pers32 '.registry-state.json'
+    $stub = '$kw = $null'
+    $tyPreNoWrite = $tyPre.Replace('try { $kw = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($regPath, $true) } catch {}', $stub)
+    Check ($tyPreNoWrite -ne $tyPre) 'stub applied to the IDate write handle'
+    $r = Invoke-Hook -Text $tyPreNoWrite -Dir $dir32 -OriginalDir $orig32 -PersistDir $pers32
+    Check (-not $r.Threw) "uninstall still completes ($($r.Error))"
+    Check ($r.Out -match 'IDate was NOT restored') 'log states clearly that IDate was not restored'
+    Check ($r.Out -match '01/01/2020') 'log carries the recorded value so it can be restored by hand'
+    Check (Test-Path -LiteralPath $statePath32) 'state file kept because the record is still the only copy'
+    Check-Eq (Get-TestDenyCountForSid 'S-1-5-11') 0 'rules added by the package were still removed'
+    Clear-TestRegKey
+
+    # ---------------------------------------------------------------- C33
+    # R2 (install side): a damaged state file must not be replaced by a guess.
+    Case 'typora post_install: a corrupt state file aborts the install untouched'
+    Clear-TestRegKey
+    $c33 = New-CaseDir
+    $dir33 = Join-Path $c33 'apps\typora0.11.18\current'
+    $orig33 = Join-Path $c33 'apps\typora0.11.18\0.11.18'
+    $pers33 = Join-Path $c33 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir33, $orig33, $pers33 -Force | Out-Null
+    $jl33 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl33
+    $r = Invoke-Hook -Text $tyPost -Dir $dir33 -OriginalDir $orig33 -PersistDir $pers33
+    Check (-not $r.Threw) "first install ok ($($r.Error))"
+    $statePath33 = Join-Path $pers33 '.registry-state.json'
+    [System.IO.File]::WriteAllText($statePath33, '{not json', $utf8)
+    $r = Invoke-Hook -Text $tyPost -Dir $dir33 -OriginalDir $orig33 -PersistDir $pers33
+    Check $r.Threw 'second install aborts on the damaged record'
+    Check ($r.Error -match 'unknown schema') "error explains why ($($r.Error))"
+    Check-Eq ([System.IO.File]::ReadAllText($statePath33, $utf8)) '{not json' 'damaged record left byte-for-byte intact'
+    Clear-TestRegKey
+
+    # ---------------------------------------------------------------- C34
+    Case 'typora post_install: an unknown schemaVersion aborts instead of re-deriving ownership'
+    Clear-TestRegKey
+    $c34 = New-CaseDir
+    $dir34 = Join-Path $c34 'apps\typora0.11.18\current'
+    $orig34 = Join-Path $c34 'apps\typora0.11.18\0.11.18'
+    $pers34 = Join-Path $c34 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir34, $orig34, $pers34 -Force | Out-Null
+    $jl34 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl34
+    $future = '{"schemaVersion":99,"addedRules":[]}'
+    New-TestFile (Join-Path $pers34 '.registry-state.json') $future
+    $r = Invoke-Hook -Text $tyPost -Dir $dir34 -OriginalDir $orig34 -PersistDir $pers34
+    Check $r.Threw 'unknown schema aborts the install'
+    Check-Eq ([System.IO.File]::ReadAllText((Join-Path $pers34 '.registry-state.json'), $utf8)) $future 'future-format record not overwritten'
+    Clear-TestRegKey
+
+    # ---------------------------------------------------------------- C35
+    # R2 (v1): v1 recorded the constant SID list as its own, so a migration may reuse
+    # that claim - but must not then call the same rules "pre-existing".
+    Case 'typora post_install: v1 state is migrated verbatim, without relabelling'
+    Clear-TestRegKey
+    $null = New-Item -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Force
+    Set-ItemProperty -Path 'HKCU:\SOFTWARE\BaobaoPkgTest\Typora' -Name 'IDate' -Value '12/31/2099'
+    foreach ($sid in @('S-1-5-11', 'S-1-5-18', 'S-1-5-32-544', 'S-1-5-32-545')) { Add-TestDenyRule $sid }
+    $c35 = New-CaseDir
+    $dir35 = Join-Path $c35 'apps\typora0.11.18\current'
+    $orig35 = Join-Path $c35 'apps\typora0.11.18\0.11.18'
+    $pers35 = Join-Path $c35 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir35, $orig35, $pers35 -Force | Out-Null
+    $jl35 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl35
+    $v1 = '{"version":1,"keyExistedBefore":true,"idatePrev":"01/01/2020","deniedSids":["S-1-5-11","S-1-5-18","S-1-5-32-544","S-1-5-32-545"]}'
+    New-TestFile (Join-Path $pers35 '.registry-state.json') $v1
+    $r = Invoke-Hook -Text $tyPost -Dir $dir35 -OriginalDir $orig35 -PersistDir $pers35
+    Check (-not $r.Threw) "v1 migration does not abort ($($r.Error))"
+    $st35 = Get-HookState $pers35
+    if ($st35) {
+        Check-Eq ([string]$st35.schemaVersion) '2' 'record upgraded to schema 2'
+        Check-Eq (@($st35.addedRules).Count) 4 'all four v1 rules still claimed by the package'
+        Check-Eq (@($st35.preExistingSids).Count) 0 'nothing relabelled as pre-existing'
+        Check-Eq ([string]$st35.idatePrev) '01/01/2020' 'original IDate carried over from v1'
+    }
+    $r = Invoke-Hook -Text $tyPre -Dir $dir35 -OriginalDir $orig35 -PersistDir $pers35
+    Check (-not $r.Threw) "uninstall after the migration ($($r.Error))"
+    Check-Eq (Get-TestDenyCountForSid 'S-1-5-11') 0 'v1-added rule removed on uninstall'
+    Clear-TestRegKey
+
+    # ---------------------------------------------------------------- C36
+    # R3: a foreign junction is not ours to write through - profile.data stays put.
+    Case 'typora post_install: a foreign junction is never written through'
+    Clear-TestRegKey
+    $c36 = New-CaseDir
+    $dir36 = Join-Path $c36 'apps\typora0.11.18\current'
+    $orig36 = Join-Path $c36 'apps\typora0.11.18\0.11.18'
+    $pers36 = Join-Path $c36 'persist\typora0.11.18'
+    $foreign36 = Join-Path $c36 'other-tool\Typora'
+    New-Item -ItemType Directory -Path $dir36, $orig36, $pers36, $foreign36 -Force | Out-Null
+    $jl36 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl36
+    $null = New-Item -Path $jl36 -ItemType Junction -Value $foreign36
+    $plain = '{"enableAutoUpdate":true,"skipUpdate":"","theme":"github"}'
+    $hex = ([System.BitConverter]::ToString([System.Text.Encoding]::UTF8.GetBytes($plain))).Replace('-', '').ToLower()
+    $pdPath = Join-Path $foreign36 'profile.data'
+    [System.IO.File]::WriteAllText($pdPath, $hex, [System.Text.Encoding]::ASCII)
+
+    $env:BAOBAO_STRICT_FOREIGN_LINK = '1'
+    try { $r = Invoke-Hook -Text $tyPost -Dir $dir36 -OriginalDir $orig36 -PersistDir $pers36 }
+    finally { $env:BAOBAO_STRICT_FOREIGN_LINK = $null }
+    Check $r.Threw 'BAOBAO_STRICT_FOREIGN_LINK=1 aborts the install'
+    $reg = Get-TestRegInfo
+    Check (($null -eq $reg) -or ($reg.DenyCount -eq 0)) 'strict abort happens before the registry is touched'
+    Check (-not (Test-Path -LiteralPath (Join-Path $pers36 '.registry-state.json'))) 'strict abort writes no state file'
+
+    $r = Invoke-Hook -Text $tyPost -Dir $dir36 -OriginalDir $orig36 -PersistDir $pers36
+    Check (-not $r.Threw) "default policy installs anyway ($($r.Error))"
+    Check-Eq ([System.IO.File]::ReadAllText($pdPath, $utf8)) $hex 'profile.data behind the foreign junction untouched'
+    Check ($r.Out -match 'profile.data') 'log says profile.data was skipped'
+    Check-Eq (Norm (Get-LinkTargetString $jl36)) (Norm $foreign36) 'foreign junction still points where it did'
+    Check (-not (Test-Path -LiteralPath (Join-Path $pers36 'TyporaData'))) 'no persist folder was fabricated for it'
+    $reg = Get-TestRegInfo
+    Check ($reg.DenyCount -ge 4) 'the registry fix is still applied (otherwise the build cannot start)'
+    Clear-TestRegKey
+    Reset-Path $jl36
+
+    # ---------------------------------------------------------------- C37
+    # N2 + retry behaviour: a junction that cannot be deleted must abort with our own
+    # guidance (not cmd's raw stderr), and the registry step must already be done.
+    Case 'typora pre_uninstall: a locked junction aborts after the registry step, then succeeds'
+    Clear-TestRegKey
+    $c37 = New-CaseDir
+    $dir37 = Join-Path $c37 'apps\typora0.11.18\current'
+    $orig37 = Join-Path $c37 'apps\typora0.11.18\0.11.18'
+    $pers37 = Join-Path $c37 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir37, $orig37, $pers37 -Force | Out-Null
+    $jl37 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl37
+    $r = Invoke-Hook -Text $tyPost -Dir $dir37 -OriginalDir $orig37 -PersistDir $pers37
+    Check (-not $r.Threw) "install ok ($($r.Error))"
+    New-TestFile (Join-Path $jl37 'keep.txt') 'persist data'
+    $h = Lock-Path $jl37
+    Check ($h.ToInt64() -ne -1) 'a handle without FILE_SHARE_DELETE was opened on the junction'
+    $r = Invoke-Hook -Text $tyPre -Dir $dir37 -OriginalDir $orig37 -PersistDir $pers37
+    Check $r.Threw 'uninstall aborted while the junction is locked'
+    Check ($r.Error -match 'could not remove the junction') "our guidance surfaced instead of raw stderr ($($r.Error))"
+    Check ($r.Error -match 'after 3 attempts') 'the retry loop actually ran three times'
+    Check (Test-Path -LiteralPath $jl37) 'junction left in place'
+    Check ($null -eq (Get-TestRegInfo)) 'registry step already finished before the junction step'
+    Check (Test-Path (Join-Path $pers37 'TyporaData\keep.txt')) 'persist data untouched'
+    Unlock-Path $h
+    Start-Sleep -Milliseconds 500
+    $r = Invoke-Hook -Text $tyPre -Dir $dir37 -OriginalDir $orig37 -PersistDir $pers37
+    Check (-not $r.Threw) "retry succeeds once the handle is gone ($($r.Error))"
+    Check (-not (Test-Path -LiteralPath $jl37)) 'junction removed on retry'
+    Clear-TestRegKey
+
+    # ---------------------------------------------------------------- C38
+    # "The key is gone" must be told apart from "the key cannot be opened": the first
+    # one means there is nothing left to revert, so the uninstall may finish.
+    Case 'typora pre_uninstall: a key that no longer exists is not treated as a failure'
+    Clear-TestRegKey
+    $c38 = New-CaseDir
+    $dir38 = Join-Path $c38 'apps\typora0.11.18\current'
+    $orig38 = Join-Path $c38 'apps\typora0.11.18\0.11.18'
+    $pers38 = Join-Path $c38 'persist\typora0.11.18'
+    New-Item -ItemType Directory -Path $dir38, $orig38, $pers38 -Force | Out-Null
+    $jl38 = Join-Path $env:APPDATA 'Typora'
+    Reset-Path $jl38
+    $r = Invoke-Hook -Text $tyPost -Dir $dir38 -OriginalDir $orig38 -PersistDir $pers38
+    Check (-not $r.Threw) "install ok ($($r.Error))"
+    $state38 = Join-Path $pers38 '.registry-state.json'
+    Check (Test-Path -LiteralPath $state38) 'record written'
+    Clear-TestRegKey   # removes our rules and deletes the key behind the hook's back
+    Check ($null -eq (Get-TestRegInfo)) 'key is gone before the uninstall'
+    $r = Invoke-Hook -Text $tyPre -Dir $dir38 -OriginalDir $orig38 -PersistDir $pers38
+    Check (-not $r.Threw) "uninstall completes when the key is already gone ($($r.Error))"
+    Check ($r.Out -match 'no longer exists') 'log says the key disappeared'
+    Check (-not (Test-Path -LiteralPath $state38)) 'record cleared (nothing left to retry)'
+    Check (-not (Test-Path -LiteralPath $jl38)) 'junction removed'
+    Clear-TestRegKey
 }
 finally {
     $env:APPDATA = $oldAppData

@@ -53,7 +53,7 @@ scoop install baobao-apps/typora0.11.18 --arch 32bit
 
 ## 使用说明
 
-- **数据与卸载**：真实数据在 `<scoop根目录>\persist\`，C 盘只保留目录联接；普通卸载保留，`-p` 彻底删除 → [docs/data-and-uninstall.md](docs/data-and-uninstall.md)
+- **数据与卸载**：真实数据在 `<scoop根目录>\persist\`，C 盘只保留目录联接（若该位置已有别的工具建立的联接，本仓库不接管，数据也不会并入 persist）；普通卸载保留，`-p` 彻底删除 → [docs/data-and-uninstall.md](docs/data-and-uninstall.md)
 - **fingerprint-chromium**：指纹参数与直启用例 → [docs/fingerprint-chromium.md](docs/fingerprint-chromium.md)
 - **OpenBrowser**：指向指纹内核、代理建议、安装目录兼容修补说明 → [docs/openbrowser.md](docs/openbrowser.md)
 - **Twinkstar**：解包说明、GPU 闪退排障、快捷方式平台限制 → [docs/twinkstar.md](docs/twinkstar.md)
@@ -65,7 +65,8 @@ scoop install baobao-apps/typora0.11.18 --arch 32bit
 仓库结构：
 
 ```
-bucket/                 # 清单文件（每个软件一个 <name>.json）
+bucket/                 # 清单文件（每个软件一个 <name>.json，由 tools/manifests 生成）
+tools/manifests/        # 清单的唯一源文件：钩子脚本 + 生成器（改脚本请改这里）
 .github/workflows/      # CI：validate（只读校验）、auto-update（每日更新检查）
 .github/scripts/        # 更新脚本与其测试
 docs/                   # 使用文档
@@ -76,12 +77,13 @@ AGENTS.md               # 维护规则（新增清单、数据持久化约定等
 
 - 先调查应用的**默认用户数据位置**，参照现有包把真实数据持久化到 Scoop `persist`；
 - 不合并两处非空数据、不接管来源不明的目录联接、不自动清空数据；
-- 安装脚本必须幂等，升级 / 重装不得删除用户数据。
+- 安装脚本必须幂等，升级 / 重装不得删除用户数据；
+- 钩子脚本写在 `tools/manifests/ps_snippets.py` 并重新生成清单，**不要手改 JSON**（CI 会校验两者一致）。
 
 提交方式：欢迎通过 issue 提议新包（说明来源与理由），或 fork 后直接提交清单 PR。main 分支启用保护，须经 PR 且校验全绿方可合并。CI 会自动检查：
 
-- 清单 JSON + Scoop Schema；
-- 更新脚本单元测试；
+- 清单 JSON + Scoop Schema，以及"清单必须等于生成器输出"；
+- 更新脚本单元测试（含慢响应头/慢正文的超时边界）；
 - 嵌入脚本的 PowerShell 语法检查；
 - 钩子夹具测试（迁移 / 冲突 / 外来联接 / 幂等 / 注册表，沙箱中执行）；
 - Windows 端到端测试（安装 / 强制更新 / 数据联接 / 卸载）。
