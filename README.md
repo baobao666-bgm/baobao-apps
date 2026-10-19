@@ -36,7 +36,7 @@ scoop install baobao-apps/typora0.11.18 --arch 32bit
 安装完成后可用的命令：
 
 - `chrome` → fingerprint-chromium 指纹内核
-- `OpenBrowser` → OpenBrowser 管理器
+- `OpenBrowser` → OpenBrowser 管理器（上游为绿色便携包、原生不带快捷方式，本包安装时会在桌面与开始菜单各建一个 `OpenBrowser`）
 - `twinkstar` → 星愿浏览器（开始菜单快捷方式在非中文代码页的系统上会被跳过，不影响使用）
 - `Typora` → Typora Markdown 编辑器
 
