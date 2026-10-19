@@ -1130,6 +1130,7 @@ if (-not $stateFile) {
         }
         Write-Host 'Typora: registry key created by this package was removed.'
         $removed = -1
+        $revertDone = $true
     } else {
         $key.Close()
         # IDate is the last step and it is the only one that may finish "incomplete"

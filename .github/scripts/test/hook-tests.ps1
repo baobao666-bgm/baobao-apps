@@ -352,6 +352,9 @@ try {
     Check (-not (Test-Path -LiteralPath $jl9)) 'junction removed'
     Check (Test-Path (Join-Path $pers9 'TyporaData\keep.txt')) 'persist data kept'
     Check ($null -eq (Get-TestRegInfo)) 'registry key removed (it was created by the package)'
+    # The record may only disappear after a verified revert; when the package deletes
+    # its own key there is nothing left to retry, so the file has to go too.
+    Check (-not (Test-Path -LiteralPath (Join-Path $pers9 '.registry-state.json'))) 'state file cleared after the key was deleted'
 
     # ---------------------------------------------------------------- C10
     Case 'typora: legacy junction into the version dir is migrated to persist'
